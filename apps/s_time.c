@@ -110,8 +110,8 @@
 
 #undef SECONDS
 #define SECONDS 30
-extern int verify_depth;
-extern int verify_error;
+extern int sc_verify_depth;
+extern int sc_verify_error;
 
 static void s_time_usage(void);
 static int parseArgs(int argc, char **argv);
@@ -209,8 +209,8 @@ static int parseArgs(int argc, char **argv)
 {
     int badop = 0;
 
-    verify_depth = 0;
-    verify_error = X509_V_OK;
+    sc_verify_depth = 0;
+    sc_verify_error = X509_V_OK;
 
     argc--;
     argv++;
@@ -241,8 +241,8 @@ static int parseArgs(int argc, char **argv)
             tm_verify = SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE;
             if (--argc < 1)
                 goto bad;
-            verify_depth = atoi(*(++argv));
-            BIO_printf(bio_err, "verify depth is %d\n", verify_depth);
+            sc_verify_depth = atoi(*(++argv));
+            BIO_printf(bio_err, "verify depth is %d\n", sc_verify_depth);
 
         } else if (strcmp(*argv, "-cert") == 0) {
 
@@ -627,9 +627,9 @@ static SSL *doConnection(SSL *scon)
     }
     if (i <= 0) {
         BIO_printf(bio_err, "ERROR\n");
-        if (verify_error != X509_V_OK)
+        if (sc_verify_error != X509_V_OK)
             BIO_printf(bio_err, "verify error:%s\n",
-                       X509_verify_cert_error_string(verify_error));
+                       X509_verify_cert_error_string(sc_verify_error));
         else
             ERR_print_errors(bio_err);
         if (scon == NULL)

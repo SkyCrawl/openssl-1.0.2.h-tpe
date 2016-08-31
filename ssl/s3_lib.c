@@ -3551,9 +3551,9 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
 
     case SSL_CTRL_GET_PEER_SIGNATURE_NID:
         if (SSL_USE_SIGALGS(s)) {
-            if (s->session && s->session->sess_cert) {
+            if (s->session && SSL_get_peer_cert(s)) {
                 const EVP_MD *sig;
-                sig = s->session->sess_cert->peer_key->digest;
+                sig = SSL_get_peer_cert(s)->peer_key->digest;
                 if (sig) {
                     *(int *)parg = EVP_MD_type(sig);
                     return 1;
@@ -3566,15 +3566,14 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
             return 0;
 
     case SSL_CTRL_GET_SERVER_TMP_KEY:
-        if (s->server || !s->session || !s->session->sess_cert)
+        if (s->server || !s->session || !SSL_get_peer_cert(s))
             return 0;
         else {
-            SESS_CERT *sc;
             EVP_PKEY *ptmp;
             int rv = 0;
-            sc = s->session->sess_cert;
 #if !defined(OPENSSL_NO_RSA) && !defined(OPENSSL_NO_DH) && !defined(OPENSSL_NO_EC) && !defined(OPENSSL_NO_ECDH)
-            if (!sc->peer_rsa_tmp && !sc->peer_dh_tmp && !sc->peer_ecdh_tmp)
+            if (!SSL_get_peer_RSA_tmp_pubkey(s) && !SSL_get_peer_DHE_tmp_pubkey(s)
+            		&& !SSL_get_peer_ECDHE_tmp_pubkey(s))
                 return 0;
 #endif
             ptmp = EVP_PKEY_new();
@@ -3582,16 +3581,16 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
                 return 0;
             if (0) ;
 #ifndef OPENSSL_NO_RSA
-            else if (sc->peer_rsa_tmp)
-                rv = EVP_PKEY_set1_RSA(ptmp, sc->peer_rsa_tmp);
+            else if (SSL_get_peer_RSA_tmp_pubkey(s))
+                rv = EVP_PKEY_set1_RSA(ptmp, SSL_get_peer_RSA_tmp_pubkey(s));
 #endif
 #ifndef OPENSSL_NO_DH
-            else if (sc->peer_dh_tmp)
-                rv = EVP_PKEY_set1_DH(ptmp, sc->peer_dh_tmp);
+            else if (SSL_get_peer_DHE_tmp_pubkey(s))
+                rv = EVP_PKEY_set1_DH(ptmp, SSL_get_peer_DHE_tmp_pubkey(s));
 #endif
 #ifndef OPENSSL_NO_ECDH
-            else if (sc->peer_ecdh_tmp)
-                rv = EVP_PKEY_set1_EC_KEY(ptmp, sc->peer_ecdh_tmp);
+            else if (SSL_get_peer_ECDHE_tmp_pubkey(s))
+                rv = EVP_PKEY_set1_EC_KEY(ptmp, SSL_get_peer_ECDHE_tmp_pubkey(s));
 #endif
             if (rv) {
                 *(EVP_PKEY **)parg = ptmp;

@@ -527,7 +527,7 @@ struct ssl_session_st {
      * to disable session caching and tickets.
      */
     int not_resumable;
-    /* The cert is the certificate used to establish this connection */
+    /* The server certificate used to establish this session */
     struct sess_cert_st /* SESS_CERT */ *sess_cert;
     /*
      * This is the cert for the other end. On clients, it will be the same as
@@ -537,10 +537,11 @@ struct ssl_session_st {
      */
     X509 *peer;
     /*
-     * when app_verify_callback accepts a session where the peer's
-     * certificate is not ok, we must remember the error for session reuse:
+     * when app_verify_callback accepts a session where a certificate is not
+     * ok, we must remember the error for session reuse:
      */
-    long verify_result;         /* only for servers */
+    long verify_result;			/* only for servers */
+
     int references;
     long timeout;
     long time;
@@ -567,7 +568,27 @@ struct ssl_session_st {
     unsigned char *tlsext_tick; /* Session ticket */
     size_t tlsext_ticklen;      /* Session ticket length */
     long tlsext_tick_lifetime_hint; /* Session lifetime hint in seconds */
-#  endif
+    /*
+	 * Indicates whether the session is being inspected by a trustworthy
+	 * proxy. If so, 'proxy_cert' (and hence also 'proxy') are required
+	 * by the handshake.
+	 */
+	int is_inspected;
+	/* The proxy certificate used to establish this session, if any */
+	struct sess_cert_st /* SESS_CERT */ *proxy_cert;
+	/*
+	 * This is the cert for the proxy. On clients, it will be the same as
+	 * proxy_cert->peer_key->x509 (the latter is not enough as proxy_cert is
+	 * not retained in the external representation of sessions, see
+	 * ssl_asn1.c).
+	 */
+	X509 *proxy;
+	/*
+	 * when app_verify_callback accepts a session where a certificate is not
+	 * ok, we must remember the error for session reuse:
+	 */
+	long proxy_verify_result;	/* only for proxies */
+#  endif		/* OPENSSL_NO_TLSEXT */
 #  ifndef OPENSSL_NO_SRP
     char *srp_username;
 #  endif
@@ -817,9 +838,52 @@ struct ssl_session_st {
 # define SSL_get_secure_renegotiation_support(ssl) \
         SSL_ctrl((ssl), SSL_CTRL_GET_RI_SUPPORT, 0, NULL)
 
-# ifndef OPENSSL_NO_HEARTBEATS
-#  define SSL_heartbeat(ssl) \
-        SSL_ctrl((ssl),SSL_CTRL_TLS_EXT_SEND_HEARTBEAT,0,NULL)
+# ifndef OPENSSL_NO_TLSEXT
+#  ifndef OPENSSL_NO_HEARTBEATS
+#   define SSL_heartbeat(ssl) \
+		SSL_ctrl((ssl),SSL_CTRL_TLS_EXT_SEND_HEARTBEAT,0,NULL)
+#  endif
+#  ifndef OPENSSL_NO_SRP
+#   ifndef OPENSSL_NO_SSL_INTERN
+		typedef struct srp_ctx_st {
+			/* param for all the callbacks */
+			void *SRP_cb_arg;
+			/* set client Hello login callback */
+			int (*TLS_ext_srp_username_callback) (SSL *, int *, void *);
+			/* set SRP N/g param callback for verification */
+			int (*SRP_verify_param_callback) (SSL *, void *);
+			/* set SRP client passwd callback */
+			char *(*SRP_give_srp_client_pwd_callback) (SSL *, void *);
+			char *login;
+			BIGNUM *N, *g, *s, *B, *A;
+			BIGNUM *a, *b, *v;
+			char *info;
+			int strength;
+			unsigned long srp_Mask;
+		} SRP_CTX;
+#   endif
+#  endif
+/* New commands for global TPE support */
+#  define SSL_CTX_get_tpe_support(ctx) \
+		SSL_CTX_ctrl((ctx), SSL_CTRL_GET_TPE_SUPPORT, 0, NULL)
+#  define SSL_CTX_set_tpe_support(ctx, enabled) \
+		SSL_CTX_ctrl((ctx), SSL_CTRL_SET_TPE_SUPPORT, (enabled), NULL)
+#  define SSL_CTX_get_tpe_client_anon_only(ctx) \
+		SSL_CTX_ctrl((ctx), SSL_CTRL_GET_TPE_CLIENT_ANON_ONLY, 0, NULL)
+#  define SSL_CTX_set_tpe_client_anon_only(ctx, enabled) \
+		SSL_CTX_ctrl((ctx), SSL_CTRL_SET_TPE_CLIENT_ANON_ONLY, (enabled), NULL)
+# endif
+
+/* see tls_srp.c */
+int SSL_SRP_CTX_init(SSL *s);
+int SSL_CTX_SRP_CTX_init(SSL_CTX *ctx);
+int SSL_SRP_CTX_free(SSL *ctx);
+int SSL_CTX_SRP_CTX_free(SSL_CTX *ctx);
+int SSL_srp_server_param_with_username(SSL *s, int *ad);
+int SRP_generate_server_master_secret(SSL *s, unsigned char *master_key);
+int SRP_Calc_A_param(SSL *s);
+int SRP_generate_client_master_secret(SSL *s, unsigned char *master_key);
+
 # endif
 
 # define SSL_CTX_set_cert_flags(ctx,op) \
@@ -841,41 +905,6 @@ void SSL_set_msg_callback(SSL *ssl,
                                       size_t len, SSL *ssl, void *arg));
 # define SSL_CTX_set_msg_callback_arg(ctx, arg) SSL_CTX_ctrl((ctx), SSL_CTRL_SET_MSG_CALLBACK_ARG, 0, (arg))
 # define SSL_set_msg_callback_arg(ssl, arg) SSL_ctrl((ssl), SSL_CTRL_SET_MSG_CALLBACK_ARG, 0, (arg))
-
-# ifndef OPENSSL_NO_SRP
-
-#  ifndef OPENSSL_NO_SSL_INTERN
-
-typedef struct srp_ctx_st {
-    /* param for all the callbacks */
-    void *SRP_cb_arg;
-    /* set client Hello login callback */
-    int (*TLS_ext_srp_username_callback) (SSL *, int *, void *);
-    /* set SRP N/g param callback for verification */
-    int (*SRP_verify_param_callback) (SSL *, void *);
-    /* set SRP client passwd callback */
-    char *(*SRP_give_srp_client_pwd_callback) (SSL *, void *);
-    char *login;
-    BIGNUM *N, *g, *s, *B, *A;
-    BIGNUM *a, *b, *v;
-    char *info;
-    int strength;
-    unsigned long srp_Mask;
-} SRP_CTX;
-
-#  endif
-
-/* see tls_srp.c */
-int SSL_SRP_CTX_init(SSL *s);
-int SSL_CTX_SRP_CTX_init(SSL_CTX *ctx);
-int SSL_SRP_CTX_free(SSL *ctx);
-int SSL_CTX_SRP_CTX_free(SSL_CTX *ctx);
-int SSL_srp_server_param_with_username(SSL *s, int *ad);
-int SRP_generate_server_master_secret(SSL *s, unsigned char *master_key);
-int SRP_Calc_A_param(SSL *s);
-int SRP_generate_client_master_secret(SSL *s, unsigned char *master_key);
-
-# endif
 
 # if defined(OPENSSL_SYS_MSDOS) && !defined(OPENSSL_SYS_WIN32)
 #  define SSL_MAX_CERT_LIST_DEFAULT 1024*30
@@ -1086,14 +1115,35 @@ struct ssl_ctx_st {
                                  HMAC_CTX *hctx, int enc);
 
     /* certificate status request info */
-    /* Callback for status request */
-    int (*tlsext_status_cb) (SSL *ssl, void *arg);
+    /* Callback for status request; if server_status is false, the proxy's
+     * status has been received (see the TPE extension) */
+    int (*tlsext_status_cb) (SSL *ssl, int server_status, void *arg);
     void *tlsext_status_arg;
 
     /* draft-rescorla-tls-opaque-prf-input-00.txt information */
     int (*tlsext_opaque_prf_input_callback) (SSL *, void *peerinput,
                                              size_t len, void *arg);
     void *tlsext_opaque_prf_input_callback_arg;
+
+    /*
+     * Indicator whether Trustworthy Proxy extension (TPE) is globally
+     * allowed (enabled by default). Can be disabled with:
+     * SSL_CTX_set_tpe_support(ctx, false);
+     *
+     * Note: this is a feature for both client and server.
+     */
+    int tpe_supported;
+
+    /*
+     * Indicator whether TPE is only allowed for sessions that DID NOT
+     * request client authentication (enabled by default). Can be
+     * disabled with:
+     * SSL_CTX_set_tpe_client_anon_only(ctx, false);
+     *
+     * Note: this is a server-only feature.
+     */
+    int tpe_client_anon_only;
+
 #  endif
 
 #  ifndef OPENSSL_NO_PSK
@@ -1180,6 +1230,7 @@ struct ssl_ctx_st {
     size_t tlsext_ellipticcurvelist_length;
     unsigned char *tlsext_ellipticcurvelist;
 #   endif                       /* OPENSSL_NO_EC */
+
 #  endif
 };
 
@@ -1526,8 +1577,7 @@ struct ssl_st {
     char *compress;
 #  endif
     /* session info */
-    /* client cert? */
-    /* This is used to hold the server certificate used */
+    /* This is used to hold the client certificate used */
     struct cert_st /* CERT */ *cert;
     /*
      * the session_id_context is used to ensure sessions are only reused in
@@ -1614,6 +1664,15 @@ struct ssl_st {
     int tlsext_ocsp_resplen;
     /* RFC4507 session ticket expected to be received or sent */
     int tlsext_ticket_expected;
+    /* Indicates whether the ClientHello message contained TPE */
+    int tpe_included;
+    /* verify result for proxy certificate chain */
+    long proxy_verify_result;
+    /* OCSP response received from proxy */
+    unsigned char *proxy_ocsp_resp;
+    int proxy_ocsp_resplen;
+	unsigned char* proxy_pubkey_tmp;
+    int proxy_pubkey_tmp_len;
 #   ifndef OPENSSL_NO_EC
     size_t tlsext_ecpointformatlist_length;
     /* our list */
@@ -1851,6 +1910,17 @@ DECLARE_PEM_rw(SSL_SESSION, SSL_SESSION)
 # define SSL_AD_UNRECOGNIZED_NAME        TLS1_AD_UNRECOGNIZED_NAME
 # define SSL_AD_BAD_CERTIFICATE_STATUS_RESPONSE TLS1_AD_BAD_CERTIFICATE_STATUS_RESPONSE
 # define SSL_AD_BAD_CERTIFICATE_HASH_VALUE TLS1_AD_BAD_CERTIFICATE_HASH_VALUE
+/* fatal (new codes for TPE) */
+# define SSL_AD_INSPECTION_REQUIRED		 TLS1_AD_INSPECTION_REQUIRED
+# define SSL_AD_INSPECTION_DENIED		 TLS1_AD_INSPECTION_DENIED
+# define SSL_AD_PROXY_NOT_TRUSTED		 TLS1_AD_PROXY_NOT_TRUSTED
+# define SSL_AD_PROXY_UNKNOWN_CA		 TLS1_AD_PROXY_UNKNOWN_CA
+# define SSL_AD_PROXY_BAD_CERTIFICATE	 TLS1_AD_PROXY_BAD_CERTIFICATE
+# define SSL_AD_PROXY_UNSUPPORTED_CERTIFICATE		 TLS1_AD_PROXY_UNSUPPORTED_CERTIFICATE
+# define SSL_AD_PROXY_CERTIFICATE_EXPIRED		 TLS1_AD_PROXY_CERTIFICATE_EXPIRED
+# define SSL_AD_PROXY_CERTIFICATE_REVOKED		 TLS1_AD_PROXY_CERTIFICATE_REVOKED
+# define SSL_AD_PROXY_CERTIFICATE_UNKNOWN		 TLS1_AD_PROXY_CERTIFICATE_UNKNOWN
+
 /* fatal */
 # define SSL_AD_UNKNOWN_PSK_IDENTITY     TLS1_AD_UNKNOWN_PSK_IDENTITY
 /* fatal */
@@ -1941,6 +2011,11 @@ DECLARE_PEM_rw(SSL_SESSION, SSL_SESSION)
 #   define SSL_CTRL_GET_TLS_EXT_HEARTBEAT_PENDING          86
 #   define SSL_CTRL_SET_TLS_EXT_HEARTBEAT_NO_REQUESTS      87
 #  endif
+/* Global support for TPE (enabled by default; can be disabled via a callback for each connection) */
+#  define SSL_CTRL_GET_TPE_SUPPORT                122
+#  define SSL_CTRL_SET_TPE_SUPPORT                123
+#  define SSL_CTRL_GET_TPE_CLIENT_ANON_ONLY		  124
+#  define SSL_CTRL_SET_TPE_CLIENT_ANON_ONLY		  125
 # endif                         /* OPENSSL_NO_TLSEXT */
 # define DTLS_CTRL_GET_TIMEOUT           73
 # define DTLS_CTRL_HANDLE_TIMEOUT        74
@@ -1981,6 +2056,7 @@ DECLARE_PEM_rw(SSL_SESSION, SSL_SESSION)
 # define SSL_CERT_SET_FIRST                      1
 # define SSL_CERT_SET_NEXT                       2
 # define SSL_CERT_SET_SERVER                     3
+
 # define DTLSv1_get_timeout(ssl, arg) \
         SSL_ctrl(ssl,DTLS_CTRL_GET_TIMEOUT,0, (void *)arg)
 # define DTLSv1_handle_timeout(ssl) \
@@ -2250,7 +2326,7 @@ SSL_SESSION *d2i_SSL_SESSION(SSL_SESSION **a, const unsigned char **pp,
                              long length);
 
 # ifdef HEADER_X509_H
-X509 *SSL_get_peer_certificate(const SSL *s);
+X509 *SSL_get_peer_x509(const SSL *s);
 # endif
 
 STACK_OF(X509) *SSL_get_peer_cert_chain(const SSL *s);
@@ -3114,6 +3190,7 @@ void ERR_load_SSL_strings(void);
 # define SSL_R_TLS_INVALID_ECPOINTFORMAT_LIST             157
 # define SSL_R_TLS_PEER_DID_NOT_RESPOND_WITH_CERTIFICATE_LIST 233
 # define SSL_R_TLS_RSA_ENCRYPTED_VALUE_LENGTH_IS_WRONG    234
+# define SSL_R_TLS_TPE_ANON_CIPHERSUITES_NOT_SUPPORTED	  450
 # define SSL_R_TRIED_TO_USE_UNSUPPORTED_CIPHER            235
 # define SSL_R_UNABLE_TO_DECODE_DH_CERTS                  236
 # define SSL_R_UNABLE_TO_DECODE_ECDH_CERTS                313

@@ -416,6 +416,7 @@ struct ISSUING_DIST_POINT_st {
 # define EXFLAG_INVALID          0x80
 # define EXFLAG_SET              0x100
 # define EXFLAG_CRITICAL         0x200
+/* Note: this is not related to TPE but to RFC 3820 */
 # define EXFLAG_PROXY            0x400
 
 # define EXFLAG_INVALID_POLICY   0x800
@@ -451,6 +452,8 @@ struct ISSUING_DIST_POINT_st {
 # define XKU_TIMESTAMP           0x40
 # define XKU_DVCS                0x80
 # define XKU_ANYEKU              0x100
+/* Special XKU value for the TPE extension */
+# define XKU_SSL_PROXY			 0x200
 
 # define X509_PURPOSE_DYNAMIC    0x1
 # define X509_PURPOSE_DYNAMIC_NAME       0x2

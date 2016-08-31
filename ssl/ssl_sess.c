@@ -215,6 +215,10 @@ SSL_SESSION *SSL_SESSION_new(void)
     ss->tlsext_ellipticcurvelist_length = 0;
     ss->tlsext_ellipticcurvelist = NULL;
 # endif
+    ss->is_inspected = 0;
+    ss->proxy_cert = NULL;
+    ss->proxy = NULL;
+    ss->proxy_verify_result = 1; /* avoid 0 (= X509_V_OK) just in case */
 #endif
     CRYPTO_new_ex_data(CRYPTO_EX_INDEX_SSL_SESSION, ss, &ss->ex_data);
 #ifndef OPENSSL_NO_PSK
@@ -257,6 +261,8 @@ SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket)
     dest->tlsext_ellipticcurvelist = NULL;
 # endif
     dest->tlsext_tick = NULL;
+    dest->proxy_cert = NULL;
+    dest->proxy = NULL;
 #endif
 #ifndef OPENSSL_NO_SRP
     dest->srp_username = NULL;
@@ -269,9 +275,11 @@ SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket)
 
     dest->references = 1;
 
+    // TODO:
     if (src->sess_cert != NULL)
         CRYPTO_add(&src->sess_cert->references, 1, CRYPTO_LOCK_SSL_SESS_CERT);
 
+    // TODO:
     if (src->peer != NULL)
         CRYPTO_add(&src->peer->references, 1, CRYPTO_LOCK_X509);
 
@@ -333,6 +341,13 @@ SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket)
         dest->tlsext_tick_lifetime_hint = 0;
         dest->tlsext_ticklen = 0;
     }
+
+    // we can just copy and adjust the code above for TPE items
+    if (src->proxy_cert != NULL)
+    	CRYPTO_add(&src->proxy_cert->references, 1, CRYPTO_LOCK_SSL_SESS_CERT);
+    if (src->proxy != NULL)
+    	CRYPTO_add(&src->proxy->references, 1, CRYPTO_LOCK_X509);
+
 #endif
 
 #ifndef OPENSSL_NO_SRP
@@ -418,6 +433,14 @@ int ssl_get_new_session(SSL *s, int session)
         ss->timeout = s->session_ctx->session_timeout;
 
     if (s->session != NULL) {
+    	// first move TPE information into the new session
+#ifndef OPENSSL_NO_TLSEXT
+    	ss->is_inspected = s->session->is_inspected;
+    	ss->proxy_cert = s->session->proxy_cert;
+    	s->session->proxy_cert = NULL; // prevent the pointer from being freed afterwards
+    	ss->proxy = s->session->proxy;
+    	s->session->proxy = NULL; // prevent the pointer from being freed afterwards
+#endif
         SSL_SESSION_free(s->session);
         s->session = NULL;
     }
@@ -862,8 +885,10 @@ void SSL_SESSION_free(SSL_SESSION *ss)
     OPENSSL_cleanse(ss->key_arg, sizeof ss->key_arg);
     OPENSSL_cleanse(ss->master_key, sizeof ss->master_key);
     OPENSSL_cleanse(ss->session_id, sizeof ss->session_id);
+    // TODO:
     if (ss->sess_cert != NULL)
         ssl_sess_cert_free(ss->sess_cert);
+    // TODO:
     if (ss->peer != NULL)
         X509_free(ss->peer);
     if (ss->ciphers != NULL)
@@ -873,6 +898,11 @@ void SSL_SESSION_free(SSL_SESSION *ss)
         OPENSSL_free(ss->tlsext_hostname);
     if (ss->tlsext_tick != NULL)
         OPENSSL_free(ss->tlsext_tick);
+    // freeing TPE items
+    if (ss->proxy_cert != NULL)
+    	ssl_sess_cert_free(ss->proxy_cert);
+    if (ss->proxy != NULL)
+    	X509_free(ss->proxy);
 # ifndef OPENSSL_NO_EC
     ss->tlsext_ecpointformatlist_length = 0;
     if (ss->tlsext_ecpointformatlist != NULL)
@@ -981,6 +1011,7 @@ long SSL_SESSION_set_time(SSL_SESSION *s, long t)
 
 X509 *SSL_SESSION_get0_peer(SSL_SESSION *s)
 {
+	// TODO: when peer and when proxy?
     return s->peer;
 }
 

@@ -500,49 +500,19 @@ int ssl3_accept(SSL *s)
 
         case SSL3_ST_SW_CERT_REQ_A:
         case SSL3_ST_SW_CERT_REQ_B:
-            if (                /* don't request cert unless asked for it: */
-                   !(s->verify_mode & SSL_VERIFY_PEER) ||
-                   /*
-                    * if SSL_VERIFY_CLIENT_ONCE is set, don't request cert
-                    * during re-negotiation:
-                    */
-                   ((s->session->peer != NULL) &&
-                    (s->verify_mode & SSL_VERIFY_CLIENT_ONCE)) ||
-                   /*
-                    * never request cert in anonymous ciphersuites (see
-                    * section "Certificate request" in SSL 3 drafts and in
-                    * RFC 2246):
-                    */
-                   ((s->s3->tmp.new_cipher->algorithm_auth & SSL_aNULL) &&
-                    /*
-                     * ... except when the application insists on
-                     * verification (against the specs, but s3_clnt.c accepts
-                     * this for SSL 3)
-                     */
-                    !(s->verify_mode & SSL_VERIFY_FAIL_IF_NO_PEER_CERT)) ||
-                   /*
-                    * never request cert in Kerberos ciphersuites
-                    */
-                   (s->s3->tmp.new_cipher->algorithm_auth & SSL_aKRB5) ||
-                   /* don't request certificate for SRP auth */
-                   (s->s3->tmp.new_cipher->algorithm_auth & SSL_aSRP)
-                   /*
-                    * With normal PSK Certificates and Certificate Requests
-                    * are omitted
-                    */
-                   || (s->s3->tmp.new_cipher->algorithm_mkey & SSL_kPSK)) {
-                /* no cert request */
-                skip = 1;
-                s->s3->tmp.cert_request = 0;
+            if (!s->s3->tmp.cert_request) {
+                // client auth IS NOT required
+            	skip = 1;
                 s->state = SSL3_ST_SW_SRVR_DONE_A;
                 if (s->s3->handshake_buffer) {
-                    if (!ssl3_digest_cached_records(s)) {
+                    // TODO: optimize server by avoiding hashing the handshake when inspected?
+                	if (!ssl3_digest_cached_records(s)) {
                         s->state = SSL_ST_ERR;
                         return -1;
                     }
                 }
             } else {
-                s->s3->tmp.cert_request = 1;
+            	// client auth IS required
                 ret = ssl3_send_certificate_request(s);
                 if (ret <= 0)
                     goto end;
@@ -1242,6 +1212,7 @@ int ssl3_get_client_hello(SSL *s)
     }
 
     /*
+     * Creating a new session or updating the previous one.
      * Check if we want to use external pre-shared secret for this handshake
      * for not reused session only. We need to generate server_random before
      * calling tls_session_secret_cb in order to allow SessionTicket
@@ -1375,7 +1346,6 @@ int ssl3_get_client_hello(SSL *s)
     /*
      * Given s->session->ciphers and SSL_get_ciphers, we must pick a cipher
      */
-
     if (!s->hit) {
 #ifdef OPENSSL_NO_COMP
         s->session->compress_meth = 0;
@@ -1453,8 +1423,8 @@ int ssl3_get_client_hello(SSL *s)
     /*-
     * we now have the following setup.
      * client_random
-     * cipher_list          - our prefered list of ciphers
-     * ciphers              - the clients prefered list of ciphers
+     * cipher_list          - our preferred list of ciphers
+     * ciphers              - the clients preferred list of ciphers
      * compression          - basically ignored right now
      * ssl version is set   - sslv3
      * s->session           - The ssl session has been setup.
@@ -1481,6 +1451,48 @@ int ssl3_get_client_hello(SSL *s)
     if (ciphers != NULL)
         sk_SSL_CIPHER_free(ciphers);
     return ret;
+}
+
+void ssl3_decide_on_client_auth(SSL* s)
+{
+	if (
+			/* don't request cert unless asked for it: */
+			!(s->verify_mode & SSL_VERIFY_PEER) ||
+		    /*
+			 * if SSL_VERIFY_CLIENT_ONCE is set, don't request cert
+			 * during re-negotiation:
+			 */
+		    ((s->session->peer != NULL) &&
+			(s->verify_mode & SSL_VERIFY_CLIENT_ONCE)) ||
+		    /*
+			 * never request cert in anonymous ciphersuites (see
+			 * section "Certificate request" in SSL 3 drafts and in
+			 * RFC 2246):
+			 */
+		    ((s->s3->tmp.new_cipher->algorithm_auth & SSL_aNULL) &&
+			/*
+			 * ... except when the application insists on
+			 * verification (against the specs, but s3_clnt.c accepts
+			 * this for SSL 3)
+			 */
+			!(s->verify_mode & SSL_VERIFY_FAIL_IF_NO_PEER_CERT)) ||
+		    /*
+			 * never request cert in Kerberos ciphersuites
+			 */
+		    (s->s3->tmp.new_cipher->algorithm_auth & SSL_aKRB5) ||
+		    /* don't request certificate for SRP auth */
+		    (s->s3->tmp.new_cipher->algorithm_auth & SSL_aSRP) ||
+		    /*
+			 * With normal PSK Certificates and Certificate Requests
+			 * are omitted
+			 */
+		    (s->s3->tmp.new_cipher->algorithm_mkey & SSL_kPSK)) {
+		/* DON'T request client client auth */
+		s->s3->tmp.cert_request = 0;
+	} else {
+		/* DO request client client auth */
+		s->s3->tmp.cert_request = 1;
+	}
 }
 
 int ssl3_send_server_hello(SSL *s)
@@ -3005,7 +3017,7 @@ int ssl3_get_cert_verify(SSL *s)
         i = 64;
     } else {
         if (SSL_USE_SIGALGS(s)) {
-            int rv = tls12_check_peer_sigalg(&md, s, p, pkey);
+            int rv = tls12_check_peer_sigalg(&md, s, s->session->sess_cert, p, pkey);
             if (rv == -1) {
                 al = SSL_AD_INTERNAL_ERROR;
                 goto f_err;
@@ -3034,26 +3046,44 @@ int ssl3_get_cert_verify(SSL *s)
         goto f_err;
     }
 
+    /*
+     * Determine the content to verify the signature with.
+     */
+    long hdatalen = 0;
+	void *hdata = NULL;
+	if(s->session->is_inspected) {
+		hdata = (void*) TLS12_TPE_get_signed_artifact(s, &hdatalen);
+	}
+
+    /*
+     * This is where we really start to verify the signature.
+     */
     if (SSL_USE_SIGALGS(s)) {
-        long hdatalen = 0;
-        void *hdata;
-        hdatalen = BIO_get_mem_data(s->s3->handshake_buffer, &hdata);
-        if (hdatalen <= 0) {
+        // check validity of the content
+        if ((hdata == NULL) || (hdatalen <= 0)) {
             SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_INTERNAL_ERROR);
             al = SSL_AD_INTERNAL_ERROR;
             goto f_err;
         }
+
+        // local content handling
+        if(!s->session->is_inspected) {
+        	hdatalen = BIO_get_mem_data(s->s3->handshake_buffer, &hdata);
+        }
+
+        // some debug
 #ifdef SSL_DEBUG
         fprintf(stderr, "Using TLS 1.2 with client verify alg %s\n",
                 EVP_MD_name(md));
 #endif
+
+        // do verify & check result
         if (!EVP_VerifyInit_ex(&mctx, md, NULL)
             || !EVP_VerifyUpdate(&mctx, hdata, hdatalen)) {
-            SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_EVP_LIB);
-            al = SSL_AD_INTERNAL_ERROR;
+        	al = SSL_AD_INTERNAL_ERROR;
+        	SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_EVP_LIB);
             goto f_err;
         }
-
         if (EVP_VerifyFinal(&mctx, p, i, pkey) <= 0) {
             al = SSL_AD_DECRYPT_ERROR;
             SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_BAD_SIGNATURE);
@@ -3062,9 +3092,55 @@ int ssl3_get_cert_verify(SSL *s)
     } else
 #ifndef OPENSSL_NO_RSA
     if (pkey->type == EVP_PKEY_RSA) {
-        i = RSA_verify(NID_md5_sha1, s->s3->tmp.cert_verify_md,
-                       MD5_DIGEST_LENGTH + SHA_DIGEST_LENGTH, p, i,
-                       pkey->pkey.rsa);
+
+    	// do verify
+    	if(!s->session->is_inspected) {
+    		i = RSA_verify(NID_md5_sha1, s->s3->tmp.cert_verify_md,
+    				MD5_DIGEST_LENGTH + SHA_DIGEST_LENGTH, p, i,
+					pkey->pkey.rsa);
+    	} else {
+    		// determine the crypto hash function the client used
+			const int key_size = RSA_size(pkey->pkey.rsa);
+			long best_fit = SSL_get_hash_code_from_cipher(SSL_get_current_cipher(s));
+			unsigned int digest_size;
+			do {
+				digest_size = SSL_get_byte_strength_from_hash_code(best_fit);
+				if(digest_size > key_size) {
+					// must use a weaker function
+					best_fit = SSL_get_weaker_from_hash_code(best_fit);
+				} else {
+					// we found the best function we can use
+					break;
+				}
+			} while (best_fit > 0);
+
+			// this should never happen but just in case...
+			if(best_fit < SSL_SHA1) { // hash is MD5 or none
+				/*
+				 * Something's really amiss... we refuse for our signature to
+				 * be so incredibly easily 'hackable'.
+				 */
+				al = SSL_AD_INTERNAL_ERROR;
+				SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_RSA_LIB);
+				goto f_err;
+			}
+
+			// compute the artifact's hash
+			EVP_MD* digest_alg = SSL_get_hash_from_code(best_fit);
+			unsigned char digest[digest_size];
+			if(!EVP_Digest(hdata, hdatalen, &digest, &digest_size, digest_alg, NULL)) {
+				// could not compute the hash for some reason...
+				al = SSL_AD_INTERNAL_ERROR;
+				SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_CRYPTO_LIB);
+				goto f_err;
+			}
+
+			// and finally, verify the signature, along with the right NID
+			long hmac_nid = SSL_get_hmac_NID_from_hash_code(best_fit);
+			i = RSA_verify(hmac_nid, &digest, digest_size, p, i, pkey->pkey.rsa);
+    	}
+
+    	// check result
         if (i < 0) {
             al = SSL_AD_DECRYPT_ERROR;
             SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_BAD_RSA_DECRYPT);
@@ -3079,9 +3155,28 @@ int ssl3_get_cert_verify(SSL *s)
 #endif
 #ifndef OPENSSL_NO_DSA
     if (pkey->type == EVP_PKEY_DSA) {
-        j = DSA_verify(pkey->save_type,
+
+    	// do verify
+    	if(!s->session->is_inspected) {
+    		j = DSA_verify(pkey->save_type,
                        &(s->s3->tmp.cert_verify_md[MD5_DIGEST_LENGTH]),
                        SHA_DIGEST_LENGTH, p, i, pkey->pkey.dsa);
+    	} else {
+    		// we have to hash the artifact first
+    		unsigned char digest[SHA_DIGEST_LENGTH];
+			if(!EVP_Digest(hdata, hdatalen, &digest, SHA_DIGEST_LENGTH, EVP_sha1(), NULL)) {
+				// could not compute the hash for some reason...
+				al = SSL_AD_INTERNAL_ERROR;
+				SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_CRYPTO_LIB);
+				goto f_err;
+			}
+
+			// and finally, verify the signature
+			j = DSA_verify(pkey->save_type, &digest, SHA_DIGEST_LENGTH,
+					p, i, pkey->pkey.dsa);
+    	}
+
+    	// check result
         if (j <= 0) {
             /* bad signature */
             al = SSL_AD_DECRYPT_ERROR;
@@ -3092,10 +3187,29 @@ int ssl3_get_cert_verify(SSL *s)
 #endif
 #ifndef OPENSSL_NO_ECDSA
     if (pkey->type == EVP_PKEY_EC) {
-        j = ECDSA_verify(pkey->save_type,
+
+    	// do verify
+    	if(!s->session->is_inspected) {
+    		j = ECDSA_verify(pkey->save_type,
                          &(s->s3->tmp.cert_verify_md[MD5_DIGEST_LENGTH]),
                          SHA_DIGEST_LENGTH, p, i, pkey->pkey.ec);
-        if (j <= 0) {
+    	} else {
+    		// we have to hash the artifact first
+			unsigned char digest[SHA_DIGEST_LENGTH];
+			if(!EVP_Digest(hdata, hdatalen, &digest, SHA_DIGEST_LENGTH, EVP_sha1(), NULL)) {
+				// could not compute the hash for some reason...
+				al = SSL_AD_INTERNAL_ERROR;
+				SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_CRYPTO_LIB);
+				goto f_err;
+			}
+
+			// and finally, verify the signature
+			j = ECDSA_verify(pkey->save_type, &digest, SHA_DIGEST_LENGTH,
+					p, i, pkey->pkey.ec);
+    	}
+
+    	// check result
+    	if (j <= 0) {
             /* bad signature */
             al = SSL_AD_DECRYPT_ERROR;
             SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_BAD_ECDSA_SIGNATURE);
@@ -3150,6 +3264,9 @@ int ssl3_get_cert_verify(SSL *s)
         BIO_free(s->s3->handshake_buffer);
         s->s3->handshake_buffer = NULL;
         s->s3->flags &= ~TLS1_FLAGS_KEEP_HANDSHAKE;
+    }
+    if(s->session->is_inspected && (hdata != NULL)) {
+    	OPENSSL_free(hdata);
     }
     EVP_MD_CTX_cleanup(&mctx);
     EVP_PKEY_free(pkey);
@@ -3263,9 +3380,9 @@ int ssl3_get_client_certificate(SSL *s)
             goto f_err;
         }
     } else {
-        i = ssl_verify_cert_chain(s, sk);
+        i = ssl_verify_cert_chain(s, sk, 1);
         if (i <= 0) {
-            al = ssl_verify_alarm_type(s->verify_result);
+            al = ssl_verify_alarm_type(s->verify_result, 1);
             SSLerr(SSL_F_SSL3_GET_CLIENT_CERTIFICATE,
                    SSL_R_CERTIFICATE_VERIFY_FAILED);
             goto f_err;

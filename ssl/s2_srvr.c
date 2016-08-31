@@ -1084,7 +1084,7 @@ static int request_certificate(SSL *s)
         goto msg_end;
     }
 
-    i = ssl_verify_cert_chain(s, sk);
+    i = ssl_verify_cert_chain(s, sk, 1);
 
     if (i > 0) {                /* we like the packet, now check the chksum */
         EVP_MD_CTX ctx;

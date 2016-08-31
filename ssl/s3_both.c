@@ -514,7 +514,7 @@ int ssl_cert_type(X509 *x, EVP_PKEY *pkey)
     return (ret);
 }
 
-int ssl_verify_alarm_type(long type)
+int ssl_verify_alarm_type(long type, int peer_server)
 {
     int al;
 
@@ -522,7 +522,7 @@ int ssl_verify_alarm_type(long type)
     case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
     case X509_V_ERR_UNABLE_TO_GET_CRL:
     case X509_V_ERR_UNABLE_TO_GET_CRL_ISSUER:
-        al = SSL_AD_UNKNOWN_CA;
+        al = peer_server ? SSL_AD_UNKNOWN_CA : SSL_AD_PROXY_UNKNOWN_CA;
         break;
     case X509_V_ERR_UNABLE_TO_DECRYPT_CERT_SIGNATURE:
     case X509_V_ERR_UNABLE_TO_DECRYPT_CRL_SIGNATURE:
@@ -535,7 +535,7 @@ int ssl_verify_alarm_type(long type)
     case X509_V_ERR_CRL_NOT_YET_VALID:
     case X509_V_ERR_CERT_UNTRUSTED:
     case X509_V_ERR_CERT_REJECTED:
-        al = SSL_AD_BAD_CERTIFICATE;
+    	al = peer_server ? SSL_AD_BAD_CERTIFICATE : SSL_AD_PROXY_BAD_CERTIFICATE;
         break;
     case X509_V_ERR_CERT_SIGNATURE_FAILURE:
     case X509_V_ERR_CRL_SIGNATURE_FAILURE:
@@ -543,10 +543,10 @@ int ssl_verify_alarm_type(long type)
         break;
     case X509_V_ERR_CERT_HAS_EXPIRED:
     case X509_V_ERR_CRL_HAS_EXPIRED:
-        al = SSL_AD_CERTIFICATE_EXPIRED;
+    	al = peer_server ? SSL_AD_CERTIFICATE_EXPIRED : SSL_AD_PROXY_CERTIFICATE_EXPIRED;
         break;
     case X509_V_ERR_CERT_REVOKED:
-        al = SSL_AD_CERTIFICATE_REVOKED;
+    	al = peer_server ? SSL_AD_CERTIFICATE_REVOKED : SSL_AD_PROXY_CERTIFICATE_REVOKED;
         break;
     case X509_V_ERR_OUT_OF_MEM:
         al = SSL_AD_INTERNAL_ERROR;
@@ -558,16 +558,19 @@ int ssl_verify_alarm_type(long type)
     case X509_V_ERR_CERT_CHAIN_TOO_LONG:
     case X509_V_ERR_PATH_LENGTH_EXCEEDED:
     case X509_V_ERR_INVALID_CA:
-        al = SSL_AD_UNKNOWN_CA;
+    	al = peer_server ? SSL_AD_UNKNOWN_CA : SSL_AD_PROXY_UNKNOWN_CA;
         break;
     case X509_V_ERR_APPLICATION_VERIFICATION:
         al = SSL_AD_HANDSHAKE_FAILURE;
         break;
     case X509_V_ERR_INVALID_PURPOSE:
-        al = SSL_AD_UNSUPPORTED_CERTIFICATE;
+    	al = peer_server ? SSL_AD_UNSUPPORTED_CERTIFICATE : SSL_AD_PROXY_UNSUPPORTED_CERTIFICATE;
         break;
+    case X509_V_ERR_PROXY_NOT_TRUSTED:
+    	al = peer_server ? SSL_AD_INTERNAL_ERROR : SSL_AD_PROXY_NOT_TRUSTED;
+    	break;
     default:
-        al = SSL_AD_CERTIFICATE_UNKNOWN;
+    	al = peer_server ? SSL_AD_CERTIFICATE_UNKNOWN : SSL_AD_PROXY_CERTIFICATE_UNKNOWN;
         break;
     }
     return (al);

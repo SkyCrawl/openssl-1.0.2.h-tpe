@@ -695,7 +695,7 @@ typedef struct cert_st {
 } CERT;
 
 typedef struct sess_cert_st {
-    STACK_OF(X509) *cert_chain; /* as received from peer (not for SSL2) */
+    STACK_OF(X509) *cert_chain; /* as received from the server or proxy (not for SSL2) */
     /* The 'peer_...' members are used only by clients. */
     int peer_cert_type;
     CERT_PKEY *peer_key;        /* points to an element of peer_pkeys (never
@@ -706,13 +706,13 @@ typedef struct sess_cert_st {
      * shouldn't even use the CERT_PKEY type here.
      */
 # ifndef OPENSSL_NO_RSA
-    RSA *peer_rsa_tmp;          /* not used for SSL 2 */
+    RSA *peer_rsa_tmp;          /* not used for SSL 2; related to export ciphers */
 # endif
 # ifndef OPENSSL_NO_DH
-    DH *peer_dh_tmp;            /* not used for SSL 2 */
+    DH *peer_dh_tmp;            /* not used for SSL 2; related to DHE */
 # endif
 # ifndef OPENSSL_NO_ECDH
-    EC_KEY *peer_ecdh_tmp;
+    EC_KEY *peer_ecdh_tmp;		/* not used for SSL 2; related to ECDHE */
 # endif
     int references;             /* actually always 1 at the moment */
 } SESS_CERT;
@@ -1096,7 +1096,7 @@ X509 *ssl_cert_get0_next_certificate(CERT *c, int first);
 void ssl_cert_set_cert_cb(CERT *c, int (*cb) (SSL *ssl, void *arg),
                           void *arg);
 
-int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk);
+int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int server_cert_chain);
 int ssl_add_cert_chain(SSL *s, CERT_PKEY *cpk, unsigned long *l);
 int ssl_build_cert_chain(CERT *c, X509_STORE *chain_store, int flags);
 int ssl_cert_set_cert_store(CERT *c, X509_STORE *store, int chain, int ref);
@@ -1112,7 +1112,7 @@ EVP_PKEY *ssl_get_sign_pkey(SSL *s, const SSL_CIPHER *c, const EVP_MD **pmd);
 int ssl_cert_type(X509 *x, EVP_PKEY *pkey);
 void ssl_set_cert_masks(CERT *c, const SSL_CIPHER *cipher);
 STACK_OF(SSL_CIPHER) *ssl_get_ciphers_by_id(SSL *s);
-int ssl_verify_alarm_type(long type);
+int ssl_verify_alarm_type(long type, int peer_server);
 void ssl_load_ciphers(void);
 int ssl_fill_hello_random(SSL *s, int server, unsigned char *field, int len);
 
@@ -1266,14 +1266,14 @@ int ssl3_client_hello(SSL *s);
 int ssl3_get_server_hello(SSL *s);
 int ssl3_get_certificate_request(SSL *s);
 int ssl3_get_new_session_ticket(SSL *s);
-int ssl3_get_cert_status(SSL *s);
+int ssl3_get_cert_status(SSL *s, int received_cert_msgs);
 int ssl3_get_server_done(SSL *s);
 int ssl3_send_client_verify(SSL *s);
 int ssl3_send_client_certificate(SSL *s);
 int ssl_do_client_cert_cb(SSL *s, X509 **px509, EVP_PKEY **ppkey);
 int ssl3_send_client_key_exchange(SSL *s);
 int ssl3_get_key_exchange(SSL *s);
-int ssl3_get_server_certificate(SSL *s);
+int ssl3_get_certificate(SSL *s, int received_cert_msgs);
 int ssl3_check_cert_and_algorithm(SSL *s);
 #  ifndef OPENSSL_NO_TLSEXT
 #   ifndef OPENSSL_NO_NEXTPROTONEG

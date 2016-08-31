@@ -200,6 +200,17 @@ extern "C" {
 # define TLS1_AD_BAD_CERTIFICATE_HASH_VALUE 114
 # define TLS1_AD_UNKNOWN_PSK_IDENTITY    115/* fatal */
 
+/* New codes for TPE */
+# define TLS1_AD_INSPECTION_REQUIRED			116/* fatal */
+# define TLS1_AD_INSPECTION_DENIED				117/* fatal */
+# define TLS1_AD_PROXY_NOT_TRUSTED				118/* fatal */
+# define TLS1_AD_PROXY_UNKNOWN_CA				119/* fatal */
+# define TLS1_AD_PROXY_UNSUPPORTED_CERTIFICATE	120/* fatal */
+# define TLS1_AD_PROXY_BAD_CERTIFICATE			121/* fatal */
+# define TLS1_AD_PROXY_CERTIFICATE_EXPIRED		122/* fatal */
+# define TLS1_AD_PROXY_CERTIFICATE_REVOKED		123/* fatal */
+# define TLS1_AD_PROXY_CERTIFICATE_UNKNOWN		124/* fatal */
+
 /* ExtensionType values from RFC3546 / RFC4366 / RFC6066 */
 # define TLSEXT_TYPE_server_name                 0
 # define TLSEXT_TYPE_max_fragment_length         1
@@ -242,6 +253,9 @@ extern "C" {
 
 /* ExtensionType value from RFC4507 */
 # define TLSEXT_TYPE_session_ticket              35
+
+ /* New ExtensionType value for TPE */
+ # define TLSEXT_TYPE_trustworthy_proxy			 36
 
 /* ExtensionType value from draft-rescorla-tls-opaque-prf-input-00.txt */
 # if 0
@@ -291,20 +305,23 @@ extern "C" {
 # define TLSEXT_hash_sha512                              6
 
 /* Total number of different digest algorithms */
-
 # define TLSEXT_hash_num                                 7
 
 /* Flag set for unrecognised algorithms */
 # define TLSEXT_nid_unknown                              0x1000000
 
 /* ECC curves */
-
 # define TLSEXT_curve_P_256                              23
 # define TLSEXT_curve_P_384                              24
 
+/* Enum Values for TPE */
+# define TLSEXT_TPE_CLIENT								 0
+# define TLSEXT_TPE_SERVER								 1
+# define TLSEXT_TPE_PROXY								 2
+
 # ifndef OPENSSL_NO_TLSEXT
 
-#  define TLSEXT_MAXLEN_host_name 255
+# define TLSEXT_MAXLEN_host_name 255
 
 const char *SSL_get_servername(const SSL *s, const int type);
 int SSL_get_servername_type(const SSL *s);

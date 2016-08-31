@@ -368,6 +368,8 @@ static ssl_trace_tbl ssl_exts_tbl[] = {
     {TLSEXT_TYPE_renegotiate, "renegotiate"},
     {TLSEXT_TYPE_next_proto_neg, "next_proto_neg"},
     {TLSEXT_TYPE_padding, "padding"}
+    /* Label for TPE when printing Hello messages  */
+    {TLSEXT_TYPE_trustworthy_proxy, "direct_endpoint"}
 };
 
 static ssl_trace_tbl ssl_curve_tbl[] = {

@@ -412,6 +412,7 @@ char *hex_to_string(const unsigned char *buffer, long len)
     const static char hexdig[] = "0123456789ABCDEF";
     if (!buffer || !len)
         return NULL;
+
     if (!(tmp = OPENSSL_malloc(len * 3 + 1))) {
         X509V3err(X509V3_F_HEX_TO_STRING, ERR_R_MALLOC_FAILURE);
         return NULL;
@@ -422,7 +423,7 @@ char *hex_to_string(const unsigned char *buffer, long len)
         *q++ = hexdig[*p & 0xf];
         *q++ = ':';
     }
-    q[-1] = 0;
+    q[-1] = '\0';
 #ifdef CHARSET_EBCDIC
     ebcdic2ascii(tmp, tmp, q - tmp - 1);
 #endif

@@ -153,6 +153,7 @@
 #include <openssl/x509v3.h>
 #include <openssl/rand.h>
 #include <openssl/ocsp.h>
+#include <openssl/md5.h>
 #ifndef OPENSSL_NO_DH
 # include <openssl/dh.h>
 #endif
@@ -373,6 +374,7 @@ SSL *SSL_new(SSL_CTX *ctx)
     s->tlsext_ocsp_resplen = -1;
     CRYPTO_add(&ctx->references, 1, CRYPTO_LOCK_SSL_CTX);
     s->initial_ctx = ctx;
+    s->tpe_included = 0;
 # ifndef OPENSSL_NO_EC
     if (ctx->tlsext_ecpointformatlist) {
         s->tlsext_ecpointformatlist =
@@ -409,6 +411,7 @@ SSL *SSL_new(SSL_CTX *ctx)
 #endif
 
     s->verify_result = X509_V_OK;
+    s->proxy_verify_result = X509_V_OK;
 
     s->method = ctx->method;
 
@@ -883,39 +886,43 @@ int SSL_pending(const SSL *s)
     return (s->method->ssl_pending(s));
 }
 
-X509 *SSL_get_peer_certificate(const SSL *s)
+X509* SSL_get_peer_x509(const SSL *s)
 {
-    X509 *r;
-
-    if ((s == NULL) || (s->session == NULL))
-        r = NULL;
-    else
-        r = s->session->peer;
-
-    if (r == NULL)
-        return (r);
-
-    CRYPTO_add(&r->references, 1, CRYPTO_LOCK_X509);
-
-    return (r);
+    if ((s == NULL) || (s->session == NULL)) {
+        return NULL;
+    }
+    else {
+    	X509 *r = s->session->is_inspected ? s->session->proxy :
+        		s->session->peer;
+    	CRYPTO_add(&r->references, 1, CRYPTO_LOCK_X509);
+    	return (r);
+    }
 }
 
-STACK_OF(X509) *SSL_get_peer_cert_chain(const SSL *s)
+SESS_CERT* SSL_get_peer_cert(const SSL *s)
 {
-    STACK_OF(X509) *r;
+    if ((s == NULL) || (s->session == NULL)) {
+        return NULL;
+    }
+    else {
+        return s->session->is_inspected ? s->session->proxy_cert :
+        		s->session->sess_cert;
+    }
+}
 
-    if ((s == NULL) || (s->session == NULL)
-        || (s->session->sess_cert == NULL))
-        r = NULL;
-    else
-        r = s->session->sess_cert->cert_chain;
+STACK_OF(X509)* SSL_get_peer_cert_chain(const SSL *s)
+{
+	/*
+	 * If we are a client, cert_chain includes the peer's own certificate; if
+	 * we are a server, it does not.
+	 */
 
-    /*
-     * If we are a client, cert_chain includes the peer's own certificate; if
-     * we are a server, it does not.
-     */
-
-    return (r);
+	SESS_CERT* sc = SSL_get_peer_cert(s);
+    if(sc == NULL) {
+    	return NULL;
+    } else {
+    	return sc->cert_chain;
+    }
 }
 
 /*
@@ -1275,6 +1282,17 @@ long SSL_CTX_ctrl(SSL_CTX *ctx, int cmd, long larg, void *parg)
         return (ctx->cert->cert_flags |= larg);
     case SSL_CTRL_CLEAR_CERT_FLAGS:
         return (ctx->cert->cert_flags &= ~larg);
+    /* TPE support handling */
+    case SSL_CTRL_SET_TPE_SUPPORT:
+    	ctx->tpe_supported = larg;
+        return 1;
+    case SSL_CTRL_GET_TPE_SUPPORT:
+    	return ctx->tpe_supported;
+    case SSL_CTRL_SET_TPE_CLIENT_ANON_ONLY:
+    	ctx->tpe_client_anon_only = larg;
+    	return 1;
+    case SSL_CTRL_GET_TPE_CLIENT_ANON_ONLY:
+    	return ctx->tpe_client_anon_only;
     default:
         return (ctx->method->ssl_ctx_ctrl(ctx, cmd, larg, parg));
     }
@@ -1600,6 +1618,72 @@ STACK_OF(SSL_CIPHER) *ssl_bytes_to_cipher_list(SSL *s, unsigned char *p,
         sk_SSL_CIPHER_free(sk);
     return (NULL);
 }
+
+#ifndef OPENSSL_NO_RSA
+RSA* SSL_get_peer_RSA_tmp_pubkey(const SSL* s)
+{
+	return s->session->is_inspected ? s->session->proxy_cert->peer_rsa_tmp :
+			s->session->sess_cert->peer_rsa_tmp;
+}
+void SSL_set_peer_RSA_tmp_pubkey(const SSL* s, const RSA* key)
+{
+	if(s->session->is_inspected) {
+		if(s->session->proxy_cert->peer_rsa_tmp != NULL) {
+			RSA_free(s->session->proxy_cert->peer_rsa_tmp);
+		}
+		s->session->proxy_cert->peer_rsa_tmp = key;
+	} else {
+		if(s->session->sess_cert->peer_rsa_tmp != NULL) {
+			RSA_free(s->session->sess_cert->peer_rsa_tmp);
+		}
+		s->session->sess_cert->peer_rsa_tmp = key;
+	}
+}
+#endif
+
+#ifndef OPENSSL_NO_DH
+DH* SSL_get_peer_DHE_tmp_pubkey(const SSL* s)
+{
+	return s->session->is_inspected ? s->session->proxy_cert->peer_dh_tmp :
+			s->session->sess_cert->peer_dh_tmp;
+}
+void SSL_set_peer_DHE_tmp_pubkey(const SSL* s, const DH* key)
+{
+	if(s->session->is_inspected) {
+		if(s->session->proxy_cert->peer_dh_tmp != NULL) {
+			DH_free(s->session->proxy_cert->peer_dh_tmp);
+		}
+		s->session->proxy_cert->peer_dh_tmp = key;
+	} else {
+		if(s->session->sess_cert->peer_dh_tmp != NULL) {
+			DH_free(s->session->sess_cert->peer_dh_tmp);
+		}
+		s->session->sess_cert->peer_dh_tmp = key;
+	}
+}
+#endif
+
+#ifndef OPENSSL_NO_ECDH
+EC_KEY* SSL_get_peer_ECDHE_tmp_pubkey(const SSL* s)
+{
+	return s->session->is_inspected ? s->session->proxy_cert->peer_ecdh_tmp :
+			s->session->sess_cert->peer_ecdh_tmp;
+}
+void SSL_set_peer_ECDHE_tmp_pubkey(const SSL* s, const EC_KEY* key)
+{
+	if(s->session->is_inspected) {
+		if(s->session->proxy_cert->peer_ecdh_tmp != NULL) {
+			EC_KEY_free(s->session->proxy_cert->peer_ecdh_tmp);
+		}
+		s->session->proxy_cert->peer_ecdh_tmp = key;
+	} else {
+		if(s->session->sess_cert->peer_ecdh_tmp != NULL) {
+			EC_KEY_free(s->session->sess_cert->peer_ecdh_tmp);
+		}
+		s->session->sess_cert->peer_ecdh_tmp = key;
+	}
+}
+#endif
 
 #ifndef OPENSSL_NO_TLSEXT
 /** return a servername extension value if provided in Client Hello, or NULL.
@@ -2007,6 +2091,8 @@ SSL_CTX *SSL_CTX_new(const SSL_METHOD *meth)
 
     ret->tlsext_status_cb = 0;
     ret->tlsext_status_arg = NULL;
+    /* Initialize global TPE support. Always enabled by default. */
+    ret->tpe_supported = 1;
 
 # ifndef OPENSSL_NO_NEXTPROTONEG
     ret->next_protos_advertised_cb = 0;
@@ -3046,7 +3132,97 @@ const SSL_CIPHER *SSL_get_current_cipher(const SSL *s)
 {
     if ((s->session != NULL) && (s->session->cipher != NULL))
         return (s->session->cipher);
-    return (NULL);
+    return NULL;
+}
+
+const long SSL_get_hash_code_from_cipher(const SSL_CIPHER* cipher)
+{
+	switch (cipher->algorithm_mac) {
+		case SSL_MD5:
+		case SSL_SHA1:
+		case SSL_SHA256:
+		case SSL_SHA384:
+			return cipher->algorithm_mac;
+		case SSL_AEAD: // GCM cipher suites... special handling
+			if(cipher->algorithm2 & (SSL_HANDSHAKE_MAC_SHA256 | TLS1_PRF_SHA256)) {
+				return SSL_SHA256;
+			} else if(cipher->algorithm2 & (SSL_HANDSHAKE_MAC_SHA384 | TLS1_PRF_SHA384)) {
+				return SSL_SHA384;
+			} else {
+				goto otherwise;
+			}
+		default: // SSL_GOST94, SSL_GOST89MAC and unknown macs
+			// should never happen (not supported at the moment)
+			otherwise:
+			return 0;
+	}
+}
+
+const EVP_MD *SSL_get_hash_from_code(const long cryptoHashCode)
+{
+	switch (cryptoHashCode) {
+		case SSL_MD5:
+			return EVP_md5();
+		case SSL_SHA1:
+			return EVP_sha1();
+		case SSL_SHA256:
+			return EVP_sha256();
+		case SSL_SHA384:
+			return EVP_sha384();
+		default: // SSL_GOST94, SSL_GOST89MAC and unknown macs
+			// should never happen (not supported at the moment)
+			return NULL;
+	}
+}
+
+const long SSL_get_hmac_NID_from_hash_code(const long cryptoHashCode)
+{
+	switch (cryptoHashCode) {
+		case SSL_MD5:
+			return NID_hmacWithMD5;
+		case SSL_SHA1:
+			return NID_hmacWithSHA1;
+		case SSL_SHA256:
+			return NID_hmacWithSHA256;
+		case SSL_SHA384:
+			return NID_hmacWithSHA384;
+		default: // SSL_GOST94, SSL_GOST89MAC and unknown macs
+			// should never happen (not supported at the moment)
+			return 0;
+	}
+}
+
+const long SSL_get_byte_strength_from_hash_code(const long cryptoHashCode)
+{
+	switch (cryptoHashCode) {
+		case SSL_MD5:
+			return MD5_DIGEST_LENGTH;
+		case SSL_SHA1:
+			return SHA_DIGEST_LENGTH;
+		case SSL_SHA256:
+			return SHA256_DIGEST_LENGTH;
+		case SSL_SHA384:
+			return SHA384_DIGEST_LENGTH;
+		default: // SSL_GOST94, SSL_GOST89MAC and unknown macs
+			// should never happen (not supported at the moment)
+			return 0;
+	}
+}
+
+const long SSL_get_weaker_from_hash_code(const long cryptoHashCode)
+{
+	switch (cryptoHashCode) {
+		case SSL_SHA1:
+			return SSL_MD5;
+		case SSL_SHA256:
+			return SSL_SHA1;
+		case SSL_SHA384:
+			return SSL_SHA256;
+		case SSL_MD5:
+		default: // SSL_GOST94, SSL_GOST89MAC and unknown macs
+			// should never happen (not supported at the moment)
+			return 0;
+	}
 }
 
 #ifdef OPENSSL_NO_COMP
@@ -3522,7 +3698,7 @@ void SSL_set_msg_callback(SSL *ssl,
 
 /*
  * Allocates new EVP_MD_CTX and sets pointer to it into given pointer
- * vairable, freeing EVP_MD_CTX previously stored in that variable, if any.
+ * variable, freeing EVP_MD_CTX previously stored in that variable, if any.
  * If EVP_MD pointer is passed, initializes ctx with this md Returns newly
  * allocated ctx;
  */

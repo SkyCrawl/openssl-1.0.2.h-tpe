@@ -707,7 +707,7 @@ int ssl_set_peer_cert_type(SESS_CERT *sc, int type)
     return (1);
 }
 
-int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk)
+int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int server_cert_chain)
 {
     X509 *x;
     int i;
@@ -722,7 +722,7 @@ int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk)
     if ((sk == NULL) || (sk_X509_num(sk) == 0))
         return (0);
 
-    x = sk_X509_value(sk, 0);
+    x = sk_X509_value(sk, 0); // end-entity certificate
     if (!X509_STORE_CTX_init(&ctx, verify_store, x, sk)) {
         SSLerr(SSL_F_SSL_VERIFY_CERT_CHAIN, ERR_R_X509_LIB);
         return (0);
@@ -758,6 +758,10 @@ int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk)
 #endif
     else {
 #ifndef OPENSSL_NO_X509_VERIFY
+    	/*
+    	 * This is where we actually verify the chain.
+    	 * Note: the trusted and verified path is built into ctx->chain.
+    	 */
         i = X509_verify_cert(&ctx);
 #else
         i = 0;
@@ -766,9 +770,83 @@ int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk)
 #endif
     }
 
-    s->verify_result = ctx.error;
-    X509_STORE_CTX_cleanup(&ctx);
+    // if successfully verified and the chain belongs to a proxy, check inspection permissions
+    if((i > 0) && !server_cert_chain) {
+    	// Note: the trusted and verified path was built into ctx->chain
+    	// Note: verification of KU extension values should be handled elsewhere
+    	int cert_count = sk_X509_num(ctx->chain);
+    	int trust_anchor_found = 0;
+    	for(int cert_index = cert_count - 1; cert_index >= 0; cert_index--) {
+    		// initialize & determine basic information
+    		X509* cert = sk_X509_value(ctx->chain, cert_index);
+    		// Note: we iterate the certificates from root to end-entity, as required by the algorithm
+    		int is_end_entity = cert_index == 0;
 
+    		// determine whether the certificate contains critical EKU
+    		int contains_critical_xku = 0;
+    		int ext_count = X509_get_ext_count(cert);
+    		for(int ext_index = 0; ext_index < ext_count; ext_index++)
+    		{
+    			X509_EXTENSION* ext = X509_get_ext(cert, ext_index);
+    			if(ext->object->nid == NID_ext_key_usage)
+    			{
+    				contains_critical_xku = X509_EXTENSION_get_critical(ext);
+    				break;
+    			}
+    		}
+
+    		// determine whether the certificate contains the new EKU value
+    		// Note: if we do it this way, we can later skip the 'contains_critical_xku' check
+    		int contains_proxy_auth = contains_critical_xku ? cert->ex_xkusage & XKU_SSL_PROXY : 0;
+
+    		// determine whether linked trust store contains the certificate
+    		int is_trusted = X509_STORE_CTX_contains_cert(ctx, cert);
+
+    		// check inspection permissions
+			if(!is_end_entity)
+			{
+				if(is_trusted)
+				{
+					if(contains_proxy_auth) // clause 1
+					{
+						trust_anchor_found = 1;
+					}
+					else if(trust_anchor_found) // clause 2
+					{
+						// sub-CAs to a valid and trusted proxy CA must contain critical EKU with the new value
+						goto proxy_not_trusted;
+					}
+				}
+				else if(trust_anchor_found && !contains_proxy_auth) // clause 3
+				{
+					// sub-CAs to a valid and trusted proxy CA must contain critical EKU with the new value
+					goto proxy_not_trusted;
+				}
+			}
+			else if(!contains_proxy_auth || !(trust_anchor_found || is_trusted))  // clause 4
+			{
+				// end-entity certificates sub-CAs to a valid and trusted proxy CA must contain critical EKU with the new value
+				goto proxy_not_trusted;
+			}
+    	}
+    }
+
+    // common handling of failure of inspection permission verification
+    if(0)
+    {
+    	proxy_not_trusted:
+		i = 0;
+		ctx.error = X509_V_ERR_PROXY_NOT_TRUSTED;
+    }
+
+    // finally, register the verification result, cleanup and return
+    if(server_cert_chain) {
+    	s->verify_result = ctx.error;
+    }
+    else {
+    	s->proxy_verify_result = ctx.error;
+    }
+    X509_STORE_CTX_cleanup(&ctx);
     return (i);
 }
 

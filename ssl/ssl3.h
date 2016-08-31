@@ -639,8 +639,8 @@ typedef struct ssl3_state_st {
 /* extra state */
 # define SSL3_ST_CW_FLUSH                (0x100|SSL_ST_CONNECT)
 # ifndef OPENSSL_NO_SCTP
-#  define DTLS1_SCTP_ST_CW_WRITE_SOCK                     (0x310|SSL_ST_CONNECT)
-#  define DTLS1_SCTP_ST_CR_READ_SOCK                      (0x320|SSL_ST_CONNECT)
+#  define DTLS1_SCTP_ST_CW_WRITE_SOCK    (0x310|SSL_ST_CONNECT)
+#  define DTLS1_SCTP_ST_CR_READ_SOCK     (0x320|SSL_ST_CONNECT)
 # endif
 /* write to server */
 # define SSL3_ST_CW_CLNT_HELLO_A         (0x110|SSL_ST_CONNECT)
@@ -670,8 +670,8 @@ typedef struct ssl3_state_st {
 # define SSL3_ST_CW_CHANGE_A             (0x1A0|SSL_ST_CONNECT)
 # define SSL3_ST_CW_CHANGE_B             (0x1A1|SSL_ST_CONNECT)
 # ifndef OPENSSL_NO_NEXTPROTONEG
-#  define SSL3_ST_CW_NEXT_PROTO_A         (0x200|SSL_ST_CONNECT)
-#  define SSL3_ST_CW_NEXT_PROTO_B         (0x201|SSL_ST_CONNECT)
+#  define SSL3_ST_CW_NEXT_PROTO_A        (0x200|SSL_ST_CONNECT)
+#  define SSL3_ST_CW_NEXT_PROTO_B        (0x201|SSL_ST_CONNECT)
 # endif
 # define SSL3_ST_CW_FINISHED_A           (0x1B0|SSL_ST_CONNECT)
 # define SSL3_ST_CW_FINISHED_B           (0x1B1|SSL_ST_CONNECT)
@@ -689,8 +689,8 @@ typedef struct ssl3_state_st {
 /* extra state */
 # define SSL3_ST_SW_FLUSH                (0x100|SSL_ST_ACCEPT)
 # ifndef OPENSSL_NO_SCTP
-#  define DTLS1_SCTP_ST_SW_WRITE_SOCK                     (0x310|SSL_ST_ACCEPT)
-#  define DTLS1_SCTP_ST_SR_READ_SOCK                      (0x320|SSL_ST_ACCEPT)
+#  define DTLS1_SCTP_ST_SW_WRITE_SOCK    (0x310|SSL_ST_ACCEPT)
+#  define DTLS1_SCTP_ST_SR_READ_SOCK     (0x320|SSL_ST_ACCEPT)
 # endif
 /* read from client */
 /* Do not change the number values, they do matter */
@@ -724,8 +724,8 @@ typedef struct ssl3_state_st {
 # define SSL3_ST_SR_CHANGE_A             (0x1B0|SSL_ST_ACCEPT)
 # define SSL3_ST_SR_CHANGE_B             (0x1B1|SSL_ST_ACCEPT)
 # ifndef OPENSSL_NO_NEXTPROTONEG
-#  define SSL3_ST_SR_NEXT_PROTO_A         (0x210|SSL_ST_ACCEPT)
-#  define SSL3_ST_SR_NEXT_PROTO_B         (0x211|SSL_ST_ACCEPT)
+#  define SSL3_ST_SR_NEXT_PROTO_A        (0x210|SSL_ST_ACCEPT)
+#  define SSL3_ST_SR_NEXT_PROTO_B        (0x211|SSL_ST_ACCEPT)
 # endif
 # define SSL3_ST_SR_FINISHED_A           (0x1C0|SSL_ST_ACCEPT)
 # define SSL3_ST_SR_FINISHED_B           (0x1C1|SSL_ST_ACCEPT)

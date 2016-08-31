@@ -596,12 +596,12 @@ X509_OBJECT *X509_OBJECT_retrieve_match(STACK_OF(X509_OBJECT) *h,
     return NULL;
 }
 
-/*-
- * Try to get issuer certificate from store. Due to limitations
- * of the API this can only retrieve a single certificate matching
- * a given subject name. However it will fill the cache with all
- * matching certificates, so we can examine the cache for all
- * matches.
+/*
+ * Try to get issuer certificate from store.
+ * Due to limitations of the API this can only retrieve a single
+ * certificate matching a given subject name. However it will fill
+ * the cache with all matching certificates, so we can examine
+ * the cache for all matches.
  *
  * Return values are:
  *  1 lookup successful.
@@ -658,6 +658,66 @@ int X509_STORE_CTX_get1_issuer(X509 **issuer, X509_STORE_CTX *ctx, X509 *x)
     }
     CRYPTO_w_unlock(CRYPTO_LOCK_X509_STORE);
     return ret;
+}
+
+/*
+ * Determine whether the linked trust store contains the given
+ * certificate.
+ * Due to limitations of the API this can only retrieve a single
+ * certificate matching a given subject name. However it will fill
+ * the cache with all matching certificates, so we can examine
+ * the cache for all matches.
+ *
+ * Return values are:
+ *  1 lookup successful.
+ *  0 certificate not found.
+ * -1 some other error.
+ */
+int X509_STORE_CTX_contains_cert(X509_STORE_CTX *ctx, X509 *cert)
+{
+	X509_NAME *subject_name = X509_get_subject_name(cert);
+    X509_OBJECT obj;
+    int ret = X509_STORE_get_by_subject(ctx, X509_LU_X509, subject_name, &obj);
+    if (ret != X509_LU_X509) {
+        if ((ret == X509_LU_RETRY) || (ret != X509_LU_FAIL)) {
+            X509_OBJECT_free_contents(&obj);
+            return -1;
+        } else {
+        	return 0;
+        }
+    } else { // we have a match
+    	// check whether the found certificate is identical
+    	if (X509_cmp(cert, obj.data.x509)) {
+    		X509_OBJECT_free_contents(&obj);
+    		return 1;
+    	}
+    	else {
+    		X509_OBJECT_free_contents(&obj);
+    	}
+
+    	// the X509_STORE_get_by_subject call cached all found certificates into ctx
+		ret = 0;
+		CRYPTO_w_lock(CRYPTO_LOCK_X509_STORE);
+		int idx = X509_OBJECT_idx_by_subject(ctx->ctx->objs, X509_LU_X509, subject_name);
+		if (idx != -1) { // just in case check but should be true (the call above)
+			for (int i = idx; i < sk_X509_OBJECT_num(ctx->ctx->objs); i++) {
+				obj = sk_X509_OBJECT_value(ctx->ctx->objs, i);
+
+				// see if we've run past the matches
+				if (obj->type != X509_LU_X509) {
+					break;
+				}
+
+				// if not, compare...
+				if (X509_cmp(cert, obj.data.x509)) {
+					ret = 1;
+					break;
+				}
+			}
+		}
+		CRYPTO_w_unlock(CRYPTO_LOCK_X509_STORE);
+		return ret;
+    }
 }
 
 int X509_STORE_set_flags(X509_STORE *ctx, unsigned long flags)

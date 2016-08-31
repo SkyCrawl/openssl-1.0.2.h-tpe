@@ -233,10 +233,14 @@ int X509_verify_cert(X509_STORE_CTX *ctx)
         goto err;
     }
 
-    num = sk_X509_num(ctx->chain);
+    num = sk_X509_num(ctx->chain); // only end-entity certificate thus far
     x = sk_X509_value(ctx->chain, num - 1);
     depth = param->depth;
 
+    /*
+     * Build a sorted and structurally valid chain from the input.
+     * Don't build trusted chain yet using the certificate store.
+     */
     for (;;) {
         /* If we have enough, we break */
         if (depth < num)
@@ -247,6 +251,8 @@ int X509_verify_cert(X509_STORE_CTX *ctx)
 
         /* If we are self signed, we break */
         if (cert_self_signed(x))
+        	// if certificate doesn't contain a signature, OpenSSL might be screwed...
+        	// is there a rule saying that root certificates must be self-signed?
             break;
         /*
          * If asked see if we can find issuer in trusted store first
@@ -288,8 +294,9 @@ int X509_verify_cert(X509_STORE_CTX *ctx)
         break;
     }
 
-    /* Remember how many untrusted certs we have */
+    // remember how many untrusted certificates we have
     j = num;
+
     /*
      * at this point, chain should contain a list of untrusted certificates.
      * We now need to add at least one trusted one, if possible, otherwise we
@@ -349,6 +356,8 @@ int X509_verify_cert(X509_STORE_CTX *ctx)
                 break;
             /* If we are self signed, we break */
             if (cert_self_signed(x))
+            	// if certificate doesn't contain a signature, OpenSSL might be screwed...
+            	// is there a rule saying that root certificates must be self-signed?
                 break;
             ok = ctx->get_issuer(&xtmp, ctx, x);
 
@@ -441,21 +450,18 @@ int X509_verify_cert(X509_STORE_CTX *ctx)
             goto err;
     }
 
-    /* We have the chain complete: now we need to check its purpose */
+    /* If explicitly trusted then we need to check the chain's purpose */
     ok = check_chain_extensions(ctx);
-
     if (!ok)
         goto err;
 
     /* Check name constraints */
-
     ok = check_name_constraints(ctx);
-
     if (!ok)
         goto err;
 
+    /* Check id */
     ok = check_id(ctx);
-
     if (!ok)
         goto err;
 
@@ -481,7 +487,7 @@ int X509_verify_cert(X509_STORE_CTX *ctx)
             goto err;
     }
 
-    /* At this point, we have a chain and need to verify it */
+    /* Verify signatures... isn't this a bit late? */
     if (ctx->verify != NULL)
         ok = ctx->verify(ctx);
     else
@@ -499,11 +505,13 @@ int X509_verify_cert(X509_STORE_CTX *ctx)
         goto err;
 #endif
 
-    /* If we get this far evaluate policies */
+    /* And finally, evaluate policies */
     if (!bad_chain && (ctx->param->flags & X509_V_FLAG_POLICY_CHECK))
         ok = ctx->check_policy(ctx);
     if (!ok)
         goto err;
+
+    /* error handling */
     if (0) {
  err:
         /* Ensure we return an error */
@@ -511,6 +519,8 @@ int X509_verify_cert(X509_STORE_CTX *ctx)
             ok = 0;
         X509_get_pubkey_parameters(NULL, ctx->chain);
     }
+
+    /* cleanup & return */
     if (sktmp != NULL)
         sk_X509_free(sktmp);
     if (chain_ss != NULL)

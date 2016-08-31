@@ -674,6 +674,10 @@ static void sv_usage(void)
 # endif
     BIO_printf(bio_err,
                " -alpn arg  - set the advertised protocols for the ALPN extension (comma-separated list)\n");
+    BIO_printf(bio_err,
+    		   " -tpe         - allow the Trustworthy Proxy extension (TPE)\n");
+    BIO_printf(bio_err,
+    		   " -tpe_not_client_auth         - allow TPE for regular connections only (not for client auth)\n");
 #endif
     BIO_printf(bio_err,
                " -keymatexport label   - Export keying material using label\n");
@@ -1127,6 +1131,7 @@ int MAIN(int argc, char *argv[])
 # endif
     const char *alpn_in = NULL;
     tlsextalpnctx alpn_ctx = { NULL, 0 };
+    int allow_tpe, allow_tpe_client_anon_only = 0;
 #endif
 #ifndef OPENSSL_NO_PSK
     /* by default do not send a PSK identity hint */
@@ -1531,6 +1536,17 @@ int MAIN(int argc, char *argv[])
                 goto bad;
             alpn_in = *(++argv);
         }
+        else if (strcmp(*argv, "-tpe") == 0) {
+            if (--argc < 1)
+                goto bad;
+            allow_tpe = 1;
+        }
+        else if (strcmp(*argv, "-tpe_not_client_auth") == 0) {
+			if (--argc < 1)
+				goto bad;
+			allow_tpe = 1;
+			allow_tpe_client_anon_only = 1;
+		}
 #endif
 #if !defined(OPENSSL_NO_JPAKE) && !defined(OPENSSL_NO_PSK)
         else if (strcmp(*argv, "-jpake") == 0) {
@@ -1933,8 +1949,10 @@ int MAIN(int argc, char *argv[])
         ERR_print_errors(bio_err);
         goto end;
     }
-#endif
-#ifndef OPENSSL_NO_TLSEXT
+
+    SSL_CTX_set_tpe_support(ctx, allow_tpe);
+    SSL_CTX_set_tpe_client_anon_only(ctx, allow_tpe_client_anon_only);
+
     if (ctx2 && !set_cert_key_stuff(ctx2, s_cert2, s_key2, NULL, build_chain))
         goto end;
 #endif
@@ -2040,10 +2058,12 @@ int MAIN(int argc, char *argv[])
     } else
 #endif
     if (CAfile != NULL) {
+    	// this is what dictates client authentication
         SSL_CTX_set_client_CA_list(ctx, SSL_load_client_CA_file(CAfile));
 #ifndef OPENSSL_NO_TLSEXT
-        if (ctx2)
+        if (ctx2) {
             SSL_CTX_set_client_CA_list(ctx2, SSL_load_client_CA_file(CAfile));
+        }
 #endif
     }
 
@@ -2648,7 +2668,7 @@ static int init_ssl_connection(SSL *con)
 
     PEM_write_bio_SSL_SESSION(bio_s_out, SSL_get_session(con));
 
-    peer = SSL_get_peer_certificate(con);
+    peer = SSL_get_peer_x509(con);
     if (peer != NULL) {
         BIO_printf(bio_s_out, "Client certificate\n");
         PEM_write_bio_X509(bio_s_out, peer);
@@ -2996,7 +3016,7 @@ static int www_body(char *hostname, int s, int stype, unsigned char *context)
             BIO_printf(io, "---\n");
             print_stats(io, SSL_get_SSL_CTX(con));
             BIO_printf(io, "---\n");
-            peer = SSL_get_peer_certificate(con);
+            peer = SSL_get_peer_x509(con);
             if (peer != NULL) {
                 BIO_printf(io, "Client certificate\n");
                 X509_print(io, peer);

@@ -412,7 +412,7 @@ int dtls1_connect(SSL *s)
             /* Check if it is anon DH or PSK */
             if (!(s->s3->tmp.new_cipher->algorithm_auth & SSL_aNULL) &&
                 !(s->s3->tmp.new_cipher->algorithm_mkey & SSL_kPSK)) {
-                ret = ssl3_get_server_certificate(s);
+                ret = ssl3_get_certificate(s, 0);
                 if (ret <= 0)
                     goto end;
 #ifndef OPENSSL_NO_TLSEXT
@@ -435,7 +435,7 @@ int dtls1_connect(SSL *s)
 
         case SSL3_ST_CR_KEY_EXCH_A:
         case SSL3_ST_CR_KEY_EXCH_B:
-            ret = ssl3_get_key_exchange(s);
+            ret = ssl3_get_key_exchange(s, &(s->session->sess_cert));
             if (ret <= 0)
                 goto end;
             s->state = SSL3_ST_CR_CERT_REQ_A;
@@ -445,7 +445,7 @@ int dtls1_connect(SSL *s)
              * at this point we check that we have the required stuff from
              * the server
              */
-            if (!ssl3_check_cert_and_algorithm(s)) {
+            if (!ssl3_check_cert_and_algorithm(s, s->session->sess_cert)) {
                 ret = -1;
                 s->state = SSL_ST_ERR;
                 goto end;
@@ -680,7 +680,7 @@ int dtls1_connect(SSL *s)
 
         case SSL3_ST_CR_CERT_STATUS_A:
         case SSL3_ST_CR_CERT_STATUS_B:
-            ret = ssl3_get_cert_status(s);
+            ret = ssl3_get_cert_status(s, 1);
             if (ret <= 0)
                 goto end;
             s->state = SSL3_ST_CR_KEY_EXCH_A;

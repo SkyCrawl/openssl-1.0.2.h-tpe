@@ -286,6 +286,7 @@ int i2d_SSL_SESSION(SSL_SESSION *in, unsigned char **pp)
         M_ASN1_I2D_len_EXP_opt(&(a.time), i2d_ASN1_INTEGER, 1, v1);
     if (in->timeout != 0L)
         M_ASN1_I2D_len_EXP_opt(&(a.timeout), i2d_ASN1_INTEGER, 2, v2);
+    // TODO: edit this to accomodate the new fields
     if (in->peer != NULL)
         M_ASN1_I2D_len_EXP_opt(in->peer, i2d_X509, 3, v3);
     M_ASN1_I2D_len_EXP_opt(&a.session_id_context, i2d_ASN1_OCTET_STRING, 4,

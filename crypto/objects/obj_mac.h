@@ -1514,6 +1514,11 @@
 #define NID_client_auth         130
 #define OBJ_client_auth         OBJ_id_kp,2L
 
+#define SN_proxy_auth           "proxyAuth"
+#define LN_proxy_auth           "TLS Web Proxy Authentication"
+#define NID_proxy_auth          958
+#define OBJ_proxy_auth          1L,2L,3L,4L,5L
+
 #define SN_code_sign            "codeSigning"
 #define LN_code_sign            "Code Signing"
 #define NID_code_sign           131

@@ -182,7 +182,7 @@ static ERR_STRING_DATA SSL_str_functs[] = {
     {ERR_FUNC(SSL_F_SSL3_GET_NEXT_PROTO), "ssl3_get_next_proto"},
     {ERR_FUNC(SSL_F_SSL3_GET_RECORD), "SSL3_GET_RECORD"},
     {ERR_FUNC(SSL_F_SSL3_GET_SERVER_CERTIFICATE),
-     "ssl3_get_server_certificate"},
+     "ssl3_get_certificate"},
     {ERR_FUNC(SSL_F_SSL3_GET_SERVER_DONE), "ssl3_get_server_done"},
     {ERR_FUNC(SSL_F_SSL3_GET_SERVER_HELLO), "ssl3_get_server_hello"},
     {ERR_FUNC(SSL_F_SSL3_HANDSHAKE_MAC), "ssl3_handshake_mac"},

@@ -460,6 +460,10 @@ static void x509v3_cache_extensions(X509 *x)
                 x->ex_xkusage |= XKU_SSL_CLIENT;
                 break;
 
+            case NID_proxy_auth:
+            	x->ex_xkusage |= XKU_SSL_PROXY;
+            	break;
+
             case NID_email_protect:
                 x->ex_xkusage |= XKU_SMIME;
                 break;

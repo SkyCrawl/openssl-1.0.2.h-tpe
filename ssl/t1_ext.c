@@ -59,6 +59,317 @@
 
 #ifndef OPENSSL_NO_TLSEXT
 
+#define ENQUOTE(name) #name
+#define STR(str) ENQUOTE(str)
+#define COMMA ,
+
+/*
+ * This much should really suffice but maybe it's safer to set double.
+ */
+#define TLS12_TPE_ARTIFACT_MAX_SIZE 4096
+
+#define TLS12_TPE_INTRO STR(If you sign this message with your certificateCOMMA \
+the signature will be used in the TLS protocol to authenticate you as a \
+client with the service identified by the following distinguished name:)
+
+#define TLS12_TPE_MEZZO1 STR(You should always verify the above name. If you \
+haven’t made a request to the service in the last few momentsCOMMA don’t sign \
+the message.)
+
+#define TLS12_TPE_MEZZO2 STR(%sFor more securityCOMMA you should verify the \
+service’s certificate’s Base16-encoded fingerprintCOMMA constructed with \
+the %s cryptographic hash function. Checking the first and last three components \
+should suffice:)
+
+#define TLS12_TPE_MEZZO3 STR(AdditionallyCOMMA this message must include \
+certain values that you don’t need to mind (or verify):)
+
+#define TLS12_TPE_OUTRO STR(This is the end of the message and nothing else \
+must follow.)
+
+unsigned char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size) {
+	/*
+	 * Allocate the result artifact.
+	 */
+
+	long pos = 0;
+	const long size = TLS12_TPE_ARTIFACT_MAX_SIZE;
+	unsigned char* buff = (unsigned char*) OPENSSL_malloc(size);
+	if(buff == NULL) {
+		return NULL;
+	}
+
+	/*
+	 * Determine the hash to use.
+	 */
+
+	const SSL_CIPHER* cipher = SSL_get_current_cipher(s);
+	const long cryptoHashCode = SSL_get_hash_code_from_cipher(cipher);
+	EVP_MD* cryptoHashFromCipher = SSL_get_hash_from_code(cryptoHashCode);
+
+	unsigned char* cryptoHashName;
+	switch (cryptoHashCode) {
+		case SSL_MD5:
+			cryptoHashName = "MD5";
+			break;
+		case SSL_SHA1:
+			cryptoHashName = "SHA1";
+			break;
+		case SSL_SHA256:
+			cryptoHashName = "SHA256";
+			break;
+		case SSL_SHA384:
+			cryptoHashName = "SHA384";
+			break;
+		default: // SSL_GOST94, SSL_GOST89MAC and unknown macs
+			// should never happen (not supported at the moment)
+			goto err;
+	}
+
+	/*
+	 * Construct the artifact.
+	 */
+
+	const X509* server_certificate = s->server ?
+			ssl_get_server_send_pkey(s)->x509 :
+			s->session->sess_cert->peer_key->x509;
+	const X509_NAME* x509_name = server_certificate->cert_info->subject;
+	unsigned char* x509_value = NULL;
+	int ret;
+
+	// fill intro
+	if(!TLS12_TPE_append_line_to_art(buff, &pos, &size, "", TLS12_TPE_INTRO)) {
+		goto err; // buffer too small or problems with encoding...
+	}
+
+	// fill the distinguished name
+	if((ret = TLS12_TPE_get_utf(x509_name, NID_commonName, &x509_value))) {
+		// component was found
+		if (TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Common Name: ", x509_value)) {
+			OPENSSL_free(x509_value);
+			x509_value = NULL;
+		} else {
+			goto err; // buffer too small or problems with encoding...
+		}
+	} else if(ret == -1) {
+		goto err; // not enough memory...
+	}
+
+	if((ret = TLS12_TPE_get_utf(x509_name, NID_organizationName, &x509_value))) {
+		// component was found
+		if (TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Organization: ", x509_value)) {
+			OPENSSL_free(x509_value);
+			x509_value = NULL;
+		} else {
+			goto err; // buffer too small or problems with encoding...
+		}
+	} else if(ret == -1) {
+		goto err; // not enough memory...
+	}
+
+	if((ret = TLS12_TPE_get_utf(x509_name, NID_organizationalUnitName, &x509_value))) {
+		// component was found
+		if (TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Organization Unit: ", x509_value)) {
+			OPENSSL_free(x509_value);
+			x509_value = NULL;
+		} else {
+			goto err; // buffer too small or problems with encoding...
+		}
+	} else if(ret == -1) {
+		goto err; // not enough memory...
+	}
+
+	if((ret = TLS12_TPE_get_utf(x509_name, NID_localityName, &x509_value))) {
+		// component was found
+		if (TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Locality: ", x509_value)) {
+			OPENSSL_free(x509_value);
+			x509_value = NULL;
+		} else {
+			goto err; // buffer too small or problems with encoding...
+		}
+	} else if(ret == -1) {
+		goto err; // not enough memory...
+	}
+
+	if((ret = TLS12_TPE_get_utf(x509_name, NID_stateOrProvinceName, &x509_value))) {
+		// component was found
+		if (TLS12_TPE_append_line_to_art(buff, &pos, &size, "- State/Province: ", x509_value)) {
+			OPENSSL_free(x509_value);
+			x509_value = NULL;
+		} else {
+			goto err; // buffer too small or problems with encoding...
+		}
+	} else if(ret == -1) {
+		goto err; // not enough memory...
+	}
+
+	if((ret = TLS12_TPE_get_utf(x509_name, NID_countryName, &x509_value))) {
+		// component was found
+		if (TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Country/Region: ", x509_value)) {
+			OPENSSL_free(x509_value);
+			x509_value = NULL;
+		} else {
+			goto err; // buffer too small or problems with encoding...
+		}
+	} else if(ret == -1) {
+		goto err; // not enough memory...
+	}
+
+	if((ret = TLS12_TPE_get_utf(x509_name, NID_Mail, &x509_value))) {
+		// component was found
+		if (TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Email: ", x509_value)) {
+			OPENSSL_free(x509_value);
+			x509_value = NULL;
+		} else {
+			goto err; // buffer too small or problems with encoding...
+		}
+	} else if(ret == -1) {
+		goto err; // not enough memory...
+	}
+
+	// fill intermezzo #1
+	if(!TLS12_TPE_append_line_to_art(buff, &pos, &size, "", TLS12_TPE_MEZZO1)) {
+		goto err; // buffer too small or problems with encoding...
+	}
+
+	// fill intermezzo #2, with hash name
+	if(!TLS12_TPE_append_line_to_art_with_pattern(buff, &pos, &size, TLS12_TPE_MEZZO2, "", cryptoHashName)) {
+		goto err; // buffer too small or problems with encoding...
+	}
+
+	// fill the server's certificate's encoded fingerprint
+	unsigned int digest_size = EVP_MAX_MD_SIZE;
+	unsigned char digest[digest_size];
+	char* encoded;
+	if(!EVP_Digest((void*)server_certificate->cert_info->enc.enc, server_certificate->cert_info->enc.len,
+			&digest, &digest_size, cryptoHashFromCipher, NULL)) {
+		goto err; // could not compute the hash for some reason...
+	} else if((encoded = hex_to_string(&(digest[0]), digest_size)) == NULL) {
+		goto err; // not enough memory...
+	} else if(!TLS12_TPE_append_line_to_art(buff, &pos, &size, "- ", encoded)) {
+		goto err; // buffer too small or problems with encoding...
+	} else { // everything OK
+		OPENSSL_free(encoded);
+		encoded = NULL;
+	}
+
+	// fill intermezzo #3
+	if(!TLS12_TPE_append_line_to_art(buff, &pos, &size, "", TLS12_TPE_MEZZO3)) {
+		goto err; // buffer too small or problems with encoding...
+	}
+
+	// fill the encoded client random data
+	if((encoded = hex_to_string(&(s->s3->client_random[0]), SSL3_RANDOM_SIZE)) == NULL) {
+		goto err; // not enough memory...
+	} else if(!TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Client random data: ", encoded)) {
+		goto err; // buffer too small or problems with encoding...
+	} else { // everything OK
+		OPENSSL_free(encoded);
+		encoded = NULL;
+	}
+
+	// fill the encoded server random data
+	if((encoded = hex_to_string(&(s->s3->server_random[0]), SSL3_RANDOM_SIZE)) == NULL) {
+		goto err; // not enough memory...
+	} else if(!TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Peer random data: ", encoded)) {
+		goto err; // buffer too small or problems with encoding...
+	} else { // everything OK
+		OPENSSL_free(encoded);
+		encoded = NULL;
+	}
+
+	// fill the encoded session ID
+	if((encoded = hex_to_string(&(s->session->session_id[0]), s->session->session_id_length)) == NULL) {
+		goto err; // not enough memory...
+	} else if(!TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Session identifier: ", encoded)) {
+		goto err; // buffer too small or problems with encoding...
+	} else { // everything OK
+		OPENSSL_free(encoded);
+		encoded = NULL;
+	}
+
+	// fill the proxy's public key, hashed and encoded
+	if((s->proxy_pubkey_tmp == NULL) || (s->proxy_pubkey_tmp_len <= 0)) {
+		// should never happen
+		goto err; // proxy's public key for the other session is required...
+	}
+	digest_size = EVP_MAX_MD_SIZE + 1;
+	if(!EVP_Digest((void*)s->proxy_pubkey_tmp, s->proxy_pubkey_tmp_len,
+			&digest, &digest_size, cryptoHashFromCipher, NULL)) {
+		goto err; // could not compute the hash for some reason...
+	} else if((encoded = hex_to_string(&(digest[0]), digest_size)) == NULL) {
+		goto err; // not enough memory...
+	} else if(!TLS12_TPE_append_line_to_art(buff, &pos, &size, "- Proxy's signed public key: ", encoded)) {
+		goto err; // buffer too small or problems with encoding...
+	} else { // everything OK
+		OPENSSL_free(encoded);
+		encoded = NULL;
+	}
+
+	// fill outro
+	if(!TLS12_TPE_append_line_to_art(buff, &pos, &size, "", TLS12_TPE_OUTRO)) {
+		goto err; // buffer too small or problems with encoding...
+	}
+
+	/*
+	 * Handle error, cleanup & return.
+	 */
+
+	if(0) {
+		err:
+		OPENSSL_free(buff);
+		if(x509_value != NULL) {
+			OPENSSL_free(x509_value);
+		}
+		return NULL;
+	}
+	else {
+		*out_size = pos;
+		return buff;
+	}
+}
+
+int TLS12_TPE_get_utf(X509_NAME* name, int nid, unsigned char** value) {
+	int idx = X509_NAME_get_index_by_NID(name, nid, -1);
+	if(idx != -1) // found
+	{
+		// entry should be defined
+		X509_NAME_ENTRY* entry = X509_NAME_get_entry(name, idx);
+		if(entry->value->length <= 0) { // just in case check
+			return 0;
+		}
+		unsigned char* result = (unsigned char*) OPENSSL_malloc(entry->value->length + 1);
+		if(result == NULL) {
+			return -1; // TODO: proper OpenSSL error handling ???
+		}
+		memset(result, entry->value->data, entry->value->length);
+		result[entry->value->length] = '\0';
+		*value = result;
+		// entry->value->type; // TODO: UTF8 encoding...
+		return 1;
+	}
+	else // not found
+	{
+		return 0;
+	}
+}
+
+int TLS12_TPE_append_line_to_art(char* art, int* pos, const int* size, const char* prefix, const char* value) {
+	return TLS12_TPE_append_line_to_art_with_pattern(art, pos, size, "%s%s\n", prefix, value);
+}
+
+int TLS12_TPE_append_line_to_art_with_pattern(char* art, int* pos, const int* size, const char* pattern, const char* prefix, const char* value) {
+	int bytes_left = *size - *pos;
+	int ret = snprintf(&(art[pos]), bytes_left, pattern, prefix, value);
+	if((ret > 0) && (ret < bytes_left)) {
+		*pos += ret;
+		return 1;
+	}
+	else {
+		return 0;
+	}
+}
+
 /* Find a custom extension from the list. */
 static custom_ext_method *custom_ext_find(custom_ext_methods *exts,
                                           unsigned int ext_type)
@@ -284,6 +595,7 @@ int SSL_extension_supported(unsigned int ext_type)
     case TLSEXT_TYPE_srp:
     case TLSEXT_TYPE_status_request:
     case TLSEXT_TYPE_use_srtp:
+    case TLSEXT_TYPE_trustworthy_proxy:
 # ifdef TLSEXT_TYPE_opaque_prf_input
     case TLSEXT_TYPE_opaque_prf_input:
 # endif

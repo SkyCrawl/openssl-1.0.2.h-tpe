@@ -389,6 +389,9 @@ void X509_STORE_CTX_set_depth(X509_STORE_CTX *ctx, int depth);
 /* The application is not happy */
 # define         X509_V_ERR_APPLICATION_VERIFICATION             50
 
+/* Verification of inspection permissions failed */
+# define         X509_V_ERR_PROXY_NOT_TRUSTED                      65
+
 /* Certificate verify flags */
 
 /* Send issuer+subject checks to verify_cb */

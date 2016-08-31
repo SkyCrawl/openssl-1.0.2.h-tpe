@@ -947,6 +947,28 @@ const char *SSL_alert_desc_string(int value)
     case TLS1_AD_UNKNOWN_PSK_IDENTITY:
         str = "UP";
         break;
+    /* New descriptions for TPE */
+    case TLS1_AD_INSPECTION_REQUIRED:
+    	str = "IR";
+    	break;
+    case TLS1_AD_INSPECTION_DENIED:
+    	str = "ID";
+    	break;
+    case TLS1_AD_PROXY_UNKNOWN_CA:
+    	str = "PA";
+    	break;
+    case TLS1_AD_PROXY_UNSUPPORTED_CERTIFICATE:
+    	str = "PS";
+    	break;
+    case TLS1_AD_PROXY_CERTIFICATE_EXPIRED:
+    	str = "PE";
+        break;
+    case TLS1_AD_PROXY_CERTIFICATE_REVOKED:
+    	str = "PR";
+    	break;
+    case TLS1_AD_PROXY_CERTIFICATE_UNKNOWN:
+    	str = "PU";
+    	break;
     default:
         str = "UK";
         break;
@@ -1049,6 +1071,28 @@ const char *SSL_alert_desc_string_long(int value)
     case TLS1_AD_UNKNOWN_PSK_IDENTITY:
         str = "unknown PSK identity";
         break;
+    /* New descriptions for TPE */
+	case TLS1_AD_INSPECTION_REQUIRED:
+		str = "inspection required";
+		break;
+	case TLS1_AD_INSPECTION_DENIED:
+		str = "inspection denied";
+		break;
+	case TLS1_AD_PROXY_UNKNOWN_CA:
+		str = "proxy unknown CA";
+		break;
+	case TLS1_AD_PROXY_UNSUPPORTED_CERTIFICATE:
+		str = "proxy unsupported certificate";
+		break;
+	case TLS1_AD_PROXY_CERTIFICATE_EXPIRED:
+		str = "proxy certificate expired";
+		break;
+	case TLS1_AD_PROXY_CERTIFICATE_REVOKED:
+		str = "proxy certificate revoked";
+		break;
+	case TLS1_AD_PROXY_CERTIFICATE_UNKNOWN:
+		str = "proxy certificate unknown";
+		break;
     default:
         str = "unknown";
         break;

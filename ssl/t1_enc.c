@@ -948,8 +948,7 @@ int tls1_cert_verify_mac(SSL *s, int md_nid, unsigned char *out)
     return ((int)ret);
 }
 
-int tls1_final_finish_mac(SSL *s,
-                          const char *str, int slen, unsigned char *out)
+int tls1_final_finish_mac(SSL *s, const char *str, int slen, unsigned char *out)
 {
     unsigned int i;
     EVP_MD_CTX ctx;
@@ -975,7 +974,7 @@ int tls1_final_finish_mac(SSL *s,
             if (!hdgst || hashsize < 0
                 || hashsize > (int)(sizeof buf - (size_t)(q - buf))) {
                 /*
-                 * internal error: 'buf' is too small for this cipersuite!
+                 * internal error: 'buf' is too small for this ciphersuite!
                  */
                 err = 1;
             } else {
@@ -1366,6 +1365,25 @@ int tls1_alert_code(int code)
         return (TLS1_AD_UNKNOWN_PSK_IDENTITY);
     case SSL_AD_INAPPROPRIATE_FALLBACK:
         return (TLS1_AD_INAPPROPRIATE_FALLBACK);
+    /* New handling for TPE codes */
+    case SSL_AD_INSPECTION_REQUIRED:
+    	return (TLS1_AD_INSPECTION_REQUIRED);
+    case SSL_AD_INSPECTION_DENIED:
+    	return (TLS1_AD_INSPECTION_DENIED);
+    case SSL_AD_PROXY_NOT_TRUSTED:
+    	return (TLS1_AD_PROXY_NOT_TRUSTED);
+    case SSL_AD_UNKNOWN_CA:
+    	return (TLS1_AD_PROXY_UNKNOWN_CA);
+    case SSL_AD_PROXY_UNSUPPORTED_CERTIFICATE:
+    	return (TLS1_AD_PROXY_UNSUPPORTED_CERTIFICATE);
+    case SSL_AD_PROXY_BAD_CERTIFICATE:
+    	return (TLS1_AD_PROXY_BAD_CERTIFICATE);
+    case SSL_AD_PROXY_CERTIFICATE_EXPIRED:
+    	return (TLS1_AD_PROXY_CERTIFICATE_EXPIRED);
+    case SSL_AD_PROXY_CERTIFICATE_REVOKED:
+    	return (TLS1_AD_PROXY_CERTIFICATE_REVOKED);
+    case SSL_AD_PROXY_CERTIFICATE_UNKNOWN:
+    	return (TLS1_AD_PROXY_CERTIFICATE_UNKNOWN);
 #if 0
         /* not appropriate for TLS, not used for DTLS */
     case DTLS1_AD_MISSING_HANDSHAKE_MESSAGE:

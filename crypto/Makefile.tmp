@@ -1,0 +1,284 @@
+#
+# OpenSSL/crypto/Makefile
+#
+
+DIR=		crypto
+TOP=		..
+CC=		cc
+INCLUDE=	-I. -I$(TOP) -I../include $(ZLIB_INCLUDE)
+# INCLUDES targets sudbirs!
+INCLUDES=	-I.. -I../.. -I../modes -I../asn1 -I../evp -I../../include $(ZLIB_INCLUDE)
+CFLAG=		-g
+MAKEDEPPROG=	makedepend
+MAKEDEPEND=	$(TOP)/util/domd $(TOP) -MD $(MAKEDEPPROG)
+MAKEFILE=       Makefile
+RM=             rm -f
+AR=		ar r
+
+RECURSIVE_MAKE=	[ -n "$(SDIRS)" ] && for i in $(SDIRS) ; do \
+		    (cd $$i && echo "making $$target in $(DIR)/$$i..." && \
+		    $(MAKE) -e TOP=../.. DIR=$$i INCLUDES='$(INCLUDES)' $$target ) || exit 1; \
+		done;
+
+PEX_LIBS=
+EX_LIBS=
+ 
+CFLAGS= $(INCLUDE) $(CFLAG)
+ASFLAGS= $(INCLUDE) $(ASFLAG)
+AFLAGS=$(ASFLAGS)
+CPUID_OBJ=mem_clr.o
+
+LIBS=
+
+GENERAL=Makefile README crypto-lib.com install.com
+TEST=constant_time_test.c
+
+LIB= $(TOP)/libcrypto.a
+SHARED_LIB= libcrypto$(SHLIB_EXT)
+LIBSRC=	cryptlib.c mem.c mem_clr.c mem_dbg.c cversion.c ex_data.c cpt_err.c \
+	ebcdic.c uid.c o_time.c o_str.c o_dir.c o_fips.c o_init.c fips_ers.c
+LIBOBJ= cryptlib.o mem.o mem_dbg.o cversion.o ex_data.o cpt_err.o ebcdic.o \
+	uid.o o_time.o o_str.o o_dir.o o_fips.o o_init.o fips_ers.o $(CPUID_OBJ)
+
+SRC= $(LIBSRC)
+
+EXHEADER= crypto.h opensslv.h opensslconf.h ebcdic.h symhacks.h \
+	ossl_typ.h
+HEADER=	cryptlib.h buildinf.h md32_common.h o_time.h o_str.h o_dir.h \
+	constant_time_locl.h $(EXHEADER)
+
+ALL=    $(GENERAL) $(SRC) $(HEADER)
+
+top:
+	@(cd ..; $(MAKE) DIRS=$(DIR) all)
+
+all: shared
+
+buildinf.h: ../Makefile
+	$(PERL) $(TOP)/util/mkbuildinf.pl "$(CC) $(CFLAGS)" "$(PLATFORM)" >buildinf.h
+
+x86cpuid.s:	x86cpuid.pl perlasm/x86asm.pl
+	$(PERL) x86cpuid.pl $(PERLASM_SCHEME) $(CFLAGS) $(PROCESSOR) > $@
+
+applink.o:	$(TOP)/ms/applink.c
+	$(CC) $(CFLAGS) -c -o $@ $(TOP)/ms/applink.c
+
+uplink.o:	$(TOP)/ms/uplink.c applink.o
+	$(CC) $(CFLAGS) -c -o $@ $(TOP)/ms/uplink.c
+
+uplink-x86.s:	$(TOP)/ms/uplink-x86.pl
+	$(PERL) $(TOP)/ms/uplink-x86.pl $(PERLASM_SCHEME) > $@
+
+x86_64cpuid.s: x86_64cpuid.pl;	$(PERL) x86_64cpuid.pl $(PERLASM_SCHEME) > $@
+ia64cpuid.s: ia64cpuid.S;	$(CC) $(CFLAGS) -E ia64cpuid.S > $@
+ppccpuid.s:	ppccpuid.pl;	$(PERL) ppccpuid.pl $(PERLASM_SCHEME) $@
+pariscid.s:	pariscid.pl;	$(PERL) pariscid.pl $(PERLASM_SCHEME) $@
+alphacpuid.s:	alphacpuid.pl
+	(preproc=$$$$.$@.S; trap "rm $$preproc" INT; \
+	$(PERL) alphacpuid.pl > $$preproc && \
+	$(CC) -E -P $$preproc > $@ && rm $$preproc)
+
+testapps:
+	[ -z "$(THIS)" ] || (	if echo $(SDIRS) | fgrep ' des '; \
+				then cd des && $(MAKE) -e des; fi )
+	[ -z "$(THIS)" ] || ( cd pkcs7 && $(MAKE) -e testapps );
+	@if [ -z "$(THIS)" ]; then $(MAKE) -f $(TOP)/Makefile reflect THIS=$@; fi
+
+subdirs:
+	@target=all; $(RECURSIVE_MAKE)
+
+files:
+	$(PERL) $(TOP)/util/files.pl "CPUID_OBJ=$(CPUID_OBJ)" Makefile >> $(TOP)/MINFO
+	@target=files; $(RECURSIVE_MAKE)
+
+links:
+	@$(PERL) $(TOP)/util/mklink.pl ../include/openssl $(EXHEADER)
+	@$(PERL) $(TOP)/util/mklink.pl ../test $(TEST)
+	@$(PERL) $(TOP)/util/mklink.pl ../apps $(APPS)
+	@target=links; $(RECURSIVE_MAKE)
+
+# lib: $(LIB): are splitted to avoid end-less loop
+lib:	$(LIB)
+	@touch lib
+$(LIB):	$(LIBOBJ)
+	$(AR) $(LIB) $(LIBOBJ)
+	test -z "$(FIPSLIBDIR)" || $(AR) $(LIB) $(FIPSLIBDIR)fipscanister.o
+	$(RANLIB) $(LIB) || echo Never mind.
+
+shared: buildinf.h lib subdirs
+	if [ -n "$(SHARED_LIBS)" ]; then \
+		(cd ..; $(MAKE) $(SHARED_LIB)); \
+	fi
+
+libs:
+	@target=lib; $(RECURSIVE_MAKE)
+
+install:
+	@[ -n "$(INSTALLTOP)" ] # should be set by top Makefile...
+	@headerlist="$(EXHEADER)"; for i in $$headerlist ;\
+	do \
+	(cp $$i $(INSTALL_PREFIX)$(INSTALLTOP)/include/openssl/$$i; \
+	chmod 644 $(INSTALL_PREFIX)$(INSTALLTOP)/include/openssl/$$i ); \
+	done;
+	@target=install; $(RECURSIVE_MAKE)
+
+lint:
+	@target=lint; $(RECURSIVE_MAKE)
+
+update: local_depend
+	@[ -z "$(THIS)" ] || (set -e; target=update; $(RECURSIVE_MAKE) )
+	@if [ -z "$(THIS)" ]; then $(MAKE) -f $(TOP)/Makefile reflect THIS=$@; fi
+
+depend: local_depend
+	@[ -z "$(THIS)" ] || (set -e; target=depend; $(RECURSIVE_MAKE) )
+	@if [ -z "$(THIS)" ]; then $(MAKE) -f $(TOP)/Makefile reflect THIS=$@; fi
+local_depend:
+	@[ -z "$(THIS)" -o -f buildinf.h ] || touch buildinf.h # fake buildinf.h if it does not exist
+	@[ -z "$(THIS)" ] || $(MAKEDEPEND) -- $(CFLAG) $(INCLUDE) $(DEPFLAG) -- $(PROGS) $(LIBSRC)
+	@[ -z "$(THIS)" -o -s buildinf.h ] || rm buildinf.h
+
+clean:
+	rm -f buildinf.h *.s *.o */*.o *.obj lib tags core .pure .nfs* *.old *.bak fluff
+	@target=clean; $(RECURSIVE_MAKE)
+
+dclean:
+	$(PERL) -pe 'if (/^# DO NOT DELETE THIS LINE/) {print; exit(0);}' $(MAKEFILE) >Makefile.new
+	mv -f Makefile.new $(MAKEFILE)
+	rm -f opensslconf.h
+	@target=dclean; $(RECURSIVE_MAKE)
+
+# DO NOT DELETE THIS LINE -- make depend depends on it.
+o_str.o: o_str.c /usr/include/ctype.h /usr/include/sys/cdefs.h \
+  /usr/include/sys/_symbol_aliasing.h \
+  /usr/include/sys/_posix_availability.h /usr/include/runetype.h \
+  /usr/include/_types.h /usr/include/sys/_types.h \
+  /usr/include/machine/_types.h /usr/include/i386/_types.h \
+  /usr/include/sys/_pthread/_pthread_types.h \
+  /usr/include/sys/_types/_size_t.h /usr/include/sys/_types/_ct_rune_t.h \
+  /usr/include/sys/_types/_rune_t.h /usr/include/sys/_types/_wchar_t.h \
+  /usr/include/sys/_types/_wint_t.h ../e_os.h ../opensslconf.h \
+  ../e_os2.h /usr/include/unistd.h /usr/include/sys/unistd.h \
+  /usr/include/sys/_types/_posix_vdisable.h \
+  /usr/include/sys/_types/_seek_set.h /usr/include/_types/_uint64_t.h \
+  /usr/include/Availability.h /usr/include/AvailabilityInternal.h \
+  /usr/include/sys/_types/_ssize_t.h /usr/include/sys/_types/_uid_t.h \
+  /usr/include/sys/_types/_gid_t.h /usr/include/sys/_types/_intptr_t.h \
+  /usr/include/sys/_types/_off_t.h /usr/include/sys/_types/_pid_t.h \
+  /usr/include/sys/_types/_useconds_t.h /usr/include/sys/_types/_null.h \
+  /usr/include/sys/select.h /usr/include/sys/appleapiopts.h \
+  /usr/include/sys/_types/_fd_def.h /usr/include/sys/_types/_timespec.h \
+  /usr/include/sys/_types/_timeval.h /usr/include/sys/_types/_time_t.h \
+  /usr/include/sys/_types/_suseconds_t.h \
+  /usr/include/sys/_types/_sigset_t.h \
+  /usr/include/sys/_types/_fd_setsize.h \
+  /usr/include/sys/_types/_fd_set.h /usr/include/sys/_types/_fd_clr.h \
+  /usr/include/sys/_types/_fd_isset.h /usr/include/sys/_types/_fd_zero.h \
+  /usr/include/sys/_types/_fd_copy.h /usr/include/sys/_select.h \
+  /usr/include/sys/_types/_dev_t.h /usr/include/sys/_types/_mode_t.h \
+  /usr/include/sys/_types/_uuid_t.h /usr/include/gethostuuid.h \
+  /usr/include/sys/types.h /usr/include/machine/types.h \
+  /usr/include/i386/types.h /usr/include/sys/_types/_int8_t.h \
+  /usr/include/sys/_types/_int16_t.h /usr/include/sys/_types/_int32_t.h \
+  /usr/include/sys/_types/_int64_t.h \
+  /usr/include/sys/_types/_uintptr_t.h /usr/include/machine/endian.h \
+  /usr/include/i386/endian.h /usr/include/sys/_endian.h \
+  /usr/include/libkern/_OSByteOrder.h \
+  /usr/include/libkern/i386/_OSByteOrder.h \
+  /usr/include/sys/_types/_blkcnt_t.h \
+  /usr/include/sys/_types/_blksize_t.h \
+  /usr/include/sys/_types/_in_addr_t.h \
+  /usr/include/sys/_types/_in_port_t.h /usr/include/sys/_types/_ino_t.h \
+  /usr/include/sys/_types/_ino64_t.h /usr/include/sys/_types/_key_t.h \
+  /usr/include/sys/_types/_nlink_t.h /usr/include/sys/_types/_id_t.h \
+  /usr/include/sys/_types/_clock_t.h /usr/include/sys/_types/_rsize_t.h \
+  /usr/include/sys/_types/_errno_t.h \
+  /usr/include/sys/_pthread/_pthread_attr_t.h \
+  /usr/include/sys/_pthread/_pthread_cond_t.h \
+  /usr/include/sys/_pthread/_pthread_condattr_t.h \
+  /usr/include/sys/_pthread/_pthread_mutex_t.h \
+  /usr/include/sys/_pthread/_pthread_mutexattr_t.h \
+  /usr/include/sys/_pthread/_pthread_once_t.h \
+  /usr/include/sys/_pthread/_pthread_rwlock_t.h \
+  /usr/include/sys/_pthread/_pthread_rwlockattr_t.h \
+  /usr/include/sys/_pthread/_pthread_t.h \
+  /usr/include/sys/_pthread/_pthread_key_t.h \
+  /usr/include/sys/_types/_fsblkcnt_t.h \
+  /usr/include/sys/_types/_fsfilcnt_t.h o_str.h \
+  /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/../lib/clang/7.3.0/include/stddef.h \
+  /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/../lib/clang/7.3.0/include/__stddef_max_align_t.h \
+  /usr/include/strings.h /usr/include/string.h \
+  /usr/include/secure/_string.h /usr/include/secure/_common.h
+o_dir.o: o_dir.c /usr/include/errno.h /usr/include/sys/errno.h \
+  /usr/include/sys/cdefs.h /usr/include/sys/_symbol_aliasing.h \
+  /usr/include/sys/_posix_availability.h \
+  /usr/include/sys/_types/_errno_t.h ../e_os.h ../opensslconf.h \
+  ../e_os2.h /usr/include/unistd.h /usr/include/_types.h \
+  /usr/include/sys/_types.h /usr/include/machine/_types.h \
+  /usr/include/i386/_types.h /usr/include/sys/_pthread/_pthread_types.h \
+  /usr/include/sys/unistd.h /usr/include/sys/_types/_posix_vdisable.h \
+  /usr/include/sys/_types/_seek_set.h /usr/include/sys/_types/_size_t.h \
+  /usr/include/_types/_uint64_t.h /usr/include/Availability.h \
+  /usr/include/AvailabilityInternal.h /usr/include/sys/_types/_ssize_t.h \
+  /usr/include/sys/_types/_uid_t.h /usr/include/sys/_types/_gid_t.h \
+  /usr/include/sys/_types/_intptr_t.h /usr/include/sys/_types/_off_t.h \
+  /usr/include/sys/_types/_pid_t.h /usr/include/sys/_types/_useconds_t.h \
+  /usr/include/sys/_types/_null.h /usr/include/sys/select.h \
+  /usr/include/sys/appleapiopts.h /usr/include/sys/_types/_fd_def.h \
+  /usr/include/sys/_types/_timespec.h /usr/include/sys/_types/_timeval.h \
+  /usr/include/sys/_types/_time_t.h \
+  /usr/include/sys/_types/_suseconds_t.h \
+  /usr/include/sys/_types/_sigset_t.h \
+  /usr/include/sys/_types/_fd_setsize.h \
+  /usr/include/sys/_types/_fd_set.h /usr/include/sys/_types/_fd_clr.h \
+  /usr/include/sys/_types/_fd_isset.h /usr/include/sys/_types/_fd_zero.h \
+  /usr/include/sys/_types/_fd_copy.h /usr/include/sys/_select.h \
+  /usr/include/sys/_types/_dev_t.h /usr/include/sys/_types/_mode_t.h \
+  /usr/include/sys/_types/_uuid_t.h /usr/include/gethostuuid.h \
+  /usr/include/sys/types.h /usr/include/machine/types.h \
+  /usr/include/i386/types.h /usr/include/sys/_types/_int8_t.h \
+  /usr/include/sys/_types/_int16_t.h /usr/include/sys/_types/_int32_t.h \
+  /usr/include/sys/_types/_int64_t.h \
+  /usr/include/sys/_types/_uintptr_t.h /usr/include/machine/endian.h \
+  /usr/include/i386/endian.h /usr/include/sys/_endian.h \
+  /usr/include/libkern/_OSByteOrder.h \
+  /usr/include/libkern/i386/_OSByteOrder.h \
+  /usr/include/sys/_types/_blkcnt_t.h \
+  /usr/include/sys/_types/_blksize_t.h \
+  /usr/include/sys/_types/_in_addr_t.h \
+  /usr/include/sys/_types/_in_port_t.h /usr/include/sys/_types/_ino_t.h \
+  /usr/include/sys/_types/_ino64_t.h /usr/include/sys/_types/_key_t.h \
+  /usr/include/sys/_types/_nlink_t.h /usr/include/sys/_types/_id_t.h \
+  /usr/include/sys/_types/_clock_t.h /usr/include/sys/_types/_rsize_t.h \
+  /usr/include/sys/_pthread/_pthread_attr_t.h \
+  /usr/include/sys/_pthread/_pthread_cond_t.h \
+  /usr/include/sys/_pthread/_pthread_condattr_t.h \
+  /usr/include/sys/_pthread/_pthread_mutex_t.h \
+  /usr/include/sys/_pthread/_pthread_mutexattr_t.h \
+  /usr/include/sys/_pthread/_pthread_once_t.h \
+  /usr/include/sys/_pthread/_pthread_rwlock_t.h \
+  /usr/include/sys/_pthread/_pthread_rwlockattr_t.h \
+  /usr/include/sys/_pthread/_pthread_t.h \
+  /usr/include/sys/_pthread/_pthread_key_t.h \
+  /usr/include/sys/_types/_fsblkcnt_t.h \
+  /usr/include/sys/_types/_fsfilcnt_t.h o_dir.h LPdir_unix.c \
+  /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/../lib/clang/7.3.0/include/stddef.h \
+  /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/../lib/clang/7.3.0/include/__stddef_max_align_t.h \
+  /usr/include/stdlib.h /usr/include/sys/wait.h \
+  /usr/include/sys/signal.h /usr/include/machine/signal.h \
+  /usr/include/i386/signal.h /usr/include/machine/_mcontext.h \
+  /usr/include/i386/_mcontext.h /usr/include/mach/i386/_structs.h \
+  /usr/include/sys/_types/_sigaltstack.h \
+  /usr/include/sys/_types/_ucontext.h /usr/include/sys/resource.h \
+  /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/../lib/clang/7.3.0/include/stdint.h \
+  /usr/include/stdint.h /usr/include/_types/_uint8_t.h \
+  /usr/include/_types/_uint16_t.h /usr/include/_types/_uint32_t.h \
+  /usr/include/_types/_intmax_t.h /usr/include/_types/_uintmax_t.h \
+  /usr/include/alloca.h /usr/include/sys/_types/_ct_rune_t.h \
+  /usr/include/sys/_types/_rune_t.h /usr/include/sys/_types/_wchar_t.h \
+  /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/../lib/clang/7.3.0/include/limits.h \
+  /usr/include/limits.h /usr/include/machine/limits.h \
+  /usr/include/i386/limits.h /usr/include/i386/_limits.h \
+  /usr/include/sys/syslimits.h /usr/include/string.h \
+  /usr/include/strings.h /usr/include/secure/_string.h \
+  /usr/include/secure/_common.h /usr/include/dirent.h \
+  /usr/include/sys/dirent.h

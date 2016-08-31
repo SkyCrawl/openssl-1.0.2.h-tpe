@@ -120,6 +120,7 @@
 #endif
 #include <openssl/ocsp.h>
 #include <openssl/rand.h>
+#include <openssl/tls1.h>
 #include "ssl_locl.h"
 
 const char tls1_version_str[] = "TLSv1" OPENSSL_VERSION_PTEXT;
@@ -1070,7 +1071,7 @@ size_t tls12_get_psigalgs(SSL *s, const unsigned char **psigs)
  * Check signature algorithm is consistent with sent supported signature
  * algorithms and if so return relevant digest.
  */
-int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s,
+int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s, SESS_CERT* sc,
                             const unsigned char *sig, EVP_PKEY *pkey)
 {
     const unsigned char *sent_sigs;
@@ -1125,8 +1126,8 @@ int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s,
     }
     /* Allow fallback to SHA1 if not strict mode */
     if (i == sent_sigslen
-        && (sig[0] != TLSEXT_hash_sha1
-            || s->cert->cert_flags & SSL_CERT_FLAGS_CHECK_TLS_STRICT)) {
+        && ((sig[0] != TLSEXT_hash_sha1)
+            || (s->cert->cert_flags & SSL_CERT_FLAGS_CHECK_TLS_STRICT))) {
         SSLerr(SSL_F_TLS12_CHECK_PEER_SIGALG, SSL_R_WRONG_SIGNATURE_TYPE);
         return 0;
     }
@@ -1138,8 +1139,8 @@ int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s,
     /*
      * Store the digest used so applications can retrieve it if they wish.
      */
-    if (s->session && s->session->sess_cert)
-        s->session->sess_cert->peer_key->digest = *pmd;
+    if (s->session && sc) // might be sess or proxy cert
+        sc->peer_key->digest = *pmd;
     return 1;
 }
 
@@ -1329,7 +1330,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
 
         /*-
          * check for enough space.
-         * 4 for the srp type type and entension length
+         * 4 for the srp type and extension length
          * 1 for the srp user identity
          * + srp user identity length
          */
@@ -1560,6 +1561,52 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
         ret += el;
     }
 # endif
+
+    if(!SSL_IS_DTLS(s) && (s->version >= TLS1_2_VERSION))
+    {
+    	/*
+    	 * We can only do this when we're creating a new session
+    	 * or resume an inspected session.
+    	 */
+    	int ok;
+    	if (s->new_session) {
+    		/*
+			 * When creating a new session, the client must allow
+			 * inspection, either globally or specifically for this
+			 * connection.
+			 */
+    		// TODO: callback
+    		ok = SSL_CTX_get_tpe_support(s->ctx);
+    	} else {
+    		/*
+			 * When resuming a session, the original decision prevails
+			 * as the extension's definition imposes the session's
+			 * inspection status on every new connection bound to
+			 * that session.
+			 */
+    		ok = s->session->is_inspected;
+    	}
+
+    	// with this, all conditions regarding TPE have been asserted
+    	if(ok) {
+    		// check for enough space
+			if ((limit - ret - 5) < 0) {
+				return NULL;
+			}
+
+			// write the extension and data
+			s2n(TLSEXT_TYPE_trustworthy_proxy, ret);
+			s2n(sizeof(unsigned char), ret);
+			*(ret++) = TLSEXT_TPE_CLIENT;
+
+			// log addition of this extension
+			s->tpe_included = 1;
+    	}
+    }
+
+    /*
+     * And finally, handle custom extensions.
+     */
     custom_ext_init(&s->cert->cli_ext);
     /* Add custom TLS Extensions to ClientHello */
     if (!custom_ext_add(s, 0, &ret, limit, al))
@@ -1799,6 +1846,24 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
         }
     }
 # endif
+
+    /*
+     * If we saw the TPE extension in the ClientHello and
+     * we found no problem in support or conditions, we must
+     * reply.
+     */
+    if (s->tpe_included) {
+    	// check for enough space
+    	if ((limit - ret - 5) < 0) {
+    		return NULL;
+    	}
+
+    	// write the extension and data
+    	s2n(TLSEXT_TYPE_trustworthy_proxy, ret);
+    	s2n(sizeof(unsigned char), ret);
+    	*(ret++) = TLSEXT_TPE_SERVER;
+    }
+
     if (!custom_ext_add(s, 1, &ret, limit, al))
         return NULL;
 
@@ -2429,6 +2494,22 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p,
                 return 0;
         }
 # endif
+        // let this be the last extension we process
+        else if (type == TLSEXT_TYPE_trustworthy_proxy) {
+        	/*
+        	 * The reason why TPE should be processed last.
+        	 * Decision whether we allow TPE should also
+        	 * depend on client authentication (more details
+        	 * in the function called below).
+        	 * Decision on client authentication depends on
+        	 * the chosen ciphersuite so make sure to satisfy
+        	 * the requirement.
+        	 */
+        	ssl3_decide_on_client_auth(s);
+
+        	if (tls12_tpe_handle_client_hello(s, data, size, al))
+        		return 0;
+        }
 
         data += size;
     }
@@ -2455,6 +2536,87 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p,
 err:
     *al = SSL_AD_DECODE_ERROR;
     return 0;
+}
+
+/*
+ * Process the TPE extension in a ClientHello.
+ * data: the contents of the extension, not including the type and length
+ * data_len: the number of bytes in 'data'
+ * al: a pointer to the alert value to send in the event of a failure.
+ * returns 0 on success, 1 on failure
+ */
+static int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
+		unsigned data_len, int *al)
+{
+	// first the necessary conditions
+	if(!SSL_IS_DTLS(s) && (s->version >= TLS1_2_VERSION) &&
+			tls12_is_cipher_compatible_with_TPE(s)) {
+		/*
+		 * We can only do this when we're creating a new session
+		 * or resume an inspected session.
+		 */
+		int ok = 0;
+		if(!s->hit) {
+			/*
+			 * When creating a new session, the server must allow
+			 * inspection globally and check if it's only enabled
+			 * for regular sessions without client authentication.
+			 */
+			if (s->s3->tmp.cert_request) {
+				ok = SSL_CTX_get_tpe_support(s->ctx) &&
+					!SSL_CTX_get_tpe_client_anon_only(s->ctx);
+			} else {
+				ok = SSL_CTX_get_tpe_support(s->ctx);
+			}
+
+			// if server doesn't allow inspection, deny it
+			if(!ok) {
+				*al = SSL_AD_INSPECTION_DENIED;
+				return 1;
+			}
+		} else {
+			/*
+			 * When resuming a session, the original decision prevails
+			 * as the extension's definition imposes the session's
+			 * inspection status on every new connection bound to
+			 * that session.
+			 */
+			ok = s->session->is_inspected;
+
+			// announce illegal behaviour in this branch
+			if(!ok) {
+				*al = SSL_AD_ILLEGAL_PARAMETER;
+				return 1;
+			}
+		}
+
+		// now onto handling the extension data
+		if (data_len != sizeof(unsigned char)) {
+			*al = TLS1_AD_DECODE_ERROR;
+			return 1;
+		} else { // everything OK thus far
+			int value = data[0];
+			switch (value) {
+			case TLSEXT_TPE_CLIENT:
+				// nothing to be done, handshake continues as usual
+				break;
+			case TLSEXT_TPE_PROXY:
+				// inspection activated
+				s->session->is_inspected = 1;
+				break;
+			default: // including TLSEXT_TPE_SERVER
+				*al = SSL_AD_ILLEGAL_PARAMETER;
+				return 1;
+			}
+
+			// log having seen the extension in ClientHello
+			s->tpe_included = 1;
+		}
+	} else {
+		// unsupported conditions
+		*al = SSL_AD_ILLEGAL_PARAMETER;
+		return 1;
+	}
 }
 
 /*
@@ -2554,6 +2716,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p,
     unsigned char *data = *p;
     int tlsext_servername = 0;
     int renegotiate_seen = 0;
+    int tpe_seen = 0;
 
 # ifndef OPENSSL_NO_NEXTPROTONEG
     s->s3->next_proto_neg_seen = 0;
@@ -2791,6 +2954,51 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p,
                 return 0;
         }
 # endif
+        else if(type == TLSEXT_TYPE_trustworthy_proxy) {
+        	/*
+        	 * First check that the extension has been requested,
+        	 * and by transition all of the required conditions.
+        	 */
+			if (!s->tpe_included) {
+				*al = TLS1_AD_UNSUPPORTED_EXTENSION;
+				return 0;
+			}
+
+			/*
+			 * We still haven't checked compatibility with the chosen
+			 * ciphersuite on the client though.
+			 */
+			if (!tls12_is_cipher_compatible_with_TPE(s)) {
+				*al = SSL_AD_ILLEGAL_PARAMETER;
+				return 0;
+			}
+
+        	// and we need to make sure we're getting the expected format
+			if (size != sizeof(unsigned char)) {
+				*al = TLS1_AD_DECODE_ERROR;
+				return 0;
+			}
+
+			// handle the data
+        	int value = data[0];
+        	switch (value)
+        	{
+				case TLSEXT_TPE_SERVER:
+					// nothing to be done, handshake continues as usual
+					break;
+				case TLSEXT_TPE_PROXY:
+					// inspection activated
+					s->session->is_inspected = 1;
+					break;
+				default: // including TLSEXT_TPE_CLIENT
+					*al = SSL_AD_ILLEGAL_PARAMETER;
+					return 0;
+        	}
+
+        	// and finally, log seeing the extension in ServerHello
+        	tpe_seen = 1;
+        }
+
         /*
          * If this extension type was not otherwise handled, but matches a
          * custom_cli_ext_record, then send it to the c callback
@@ -2799,6 +3007,28 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p,
             return 0;
 
         data += size;
+    }
+
+    // if server nor proxy give a response to our call
+    if(s->tpe_included && !tpe_seen) {
+    	if(s->hit) {
+    		// we're resuming a session
+    		if(s->session->is_inspected) {
+    			/*
+    			 * Session is inspected and therefore, connection must be
+    			 * inspected.
+    			 */
+    			*al = SSL_AD_ILLEGAL_PARAMETER;
+    			return 0;
+    		}
+    	} else {
+    		/*
+    		 * We're creating a new session. Looks like the server is
+    		 * not TPE-enabled, and there's no TPE-enabled proxy or it
+    		 * simply decided not to trigger the extension. Anyhow,
+    		 * handshake continues as usual.
+			 */
+    	}
     }
 
     if (data != d + n) {
@@ -3514,6 +3744,22 @@ static tls12_lookup tls12_sig[] = {
     {EVP_PKEY_DSA, TLSEXT_signature_dsa},
     {EVP_PKEY_EC, TLSEXT_signature_ecdsa}
 };
+
+int tls12_is_cipher_compatible_with_TPE(SSL *s)
+{
+	SSL_CIPHER* cipher = SSL_get_current_cipher(s);
+	if (!(cipher->algorithm_mkey & (SSL_kRSA | SSL_kDHE | SSL_kECDHE)))
+	{
+		// DH, ECDH, PSK, SRP, KRB5, GOST not supported at the moment
+		return 0;
+	}
+	if (!(cipher->algorithm_auth & (SSL_aRSA | SSL_aDSS | SSL_aDH | SSL_aECDH | SSL_aECDSA)))
+	{
+		// GOST, KRB5, PSK, SRP & anonymous not supported at the moment
+		return 0;
+	}
+	return 1;
+}
 
 static int tls12_find_id(int nid, tls12_lookup *table, size_t tlen)
 {

@@ -430,6 +430,8 @@ static void sc_usage(void)
                " -client_sigalgs arg - Signature algorithms to support for client\n");
     BIO_printf(bio_err,
                "                       certificate authentication (colon-separated list)\n");
+    BIO_printf(bio_err,
+    		   " -tpe         - allow the Trustworthy Proxy extension (TPE)\n");
 #endif
 #ifndef OPENSSL_NO_NEXTPROTONEG
     BIO_printf(bio_err,
@@ -712,6 +714,7 @@ int MAIN(int argc, char **argv)
 #ifndef OPENSSL_NO_TLSEXT
     char *servername = NULL;
     tlsextctx tlsextcbp = { NULL, 0 };
+    int allow_tpe = 0;
 # ifndef OPENSSL_NO_NEXTPROTONEG
     const char *next_proto_neg_in = NULL;
 # endif
@@ -874,6 +877,8 @@ int MAIN(int argc, char **argv)
             c_tlsextdebug = 1;
         else if (strcmp(*argv, "-status") == 0)
             c_status_req = 1;
+        else if (strcmp(*argv, "-tpe") == 0)
+        	allow_tpe = 1;
 #endif
 #ifdef WATT32
         else if (strcmp(*argv, "-wdebug") == 0)
@@ -1325,6 +1330,7 @@ int MAIN(int argc, char **argv)
         SSL_CTX_set_alpn_protos(ctx, alpn, alpn_len);
         OPENSSL_free(alpn);
     }
+    SSL_CTX_set_tpe_support(ctx, allow_tpe);
 #endif
 #ifndef OPENSSL_NO_TLSEXT
     for (i = 0; i < serverinfo_types_count; i++) {
@@ -2146,7 +2152,7 @@ static void print_stuff(BIO *bio, SSL *s, int full)
         }
 
         BIO_printf(bio, "---\n");
-        peer = SSL_get_peer_certificate(s);
+        peer = SSL_get_peer_x509(s);
         if (peer != NULL) {
             BIO_printf(bio, "Server certificate\n");
 

@@ -62,12 +62,12 @@
  * [including the GNU Public Licence.]
  */
 
-#define NUM_NID 958
+#define NUM_NID 959
 #define NUM_SN 951
 #define NUM_LN 951
-#define NUM_OBJ 890
+#define NUM_OBJ 891
 
-static const unsigned char lvalues[6255]={
+static const unsigned char lvalues[6260]={
 0x2A,0x86,0x48,0x86,0xF7,0x0D,               /* [  0] OBJ_rsadsi */
 0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,          /* [  6] OBJ_pkcs */
 0x2A,0x86,0x48,0x86,0xF7,0x0D,0x02,0x02,     /* [ 13] OBJ_md2 */
@@ -952,6 +952,7 @@ static const unsigned char lvalues[6255]={
 0x2B,0x06,0x01,0x04,0x01,0x82,0x37,0x3C,0x02,0x01,0x01,/* [6221] OBJ_jurisdictionLocalityName */
 0x2B,0x06,0x01,0x04,0x01,0x82,0x37,0x3C,0x02,0x01,0x02,/* [6232] OBJ_jurisdictionStateOrProvinceName */
 0x2B,0x06,0x01,0x04,0x01,0x82,0x37,0x3C,0x02,0x01,0x03,/* [6243] OBJ_jurisdictionCountryName */
+0x01,0x02,0x03,0x04,0x05,     /* [6254] OBJ_proxy_auth */
 };
 
 static const ASN1_OBJECT nid_objs[NUM_NID]={
@@ -2514,7 +2515,8 @@ static const ASN1_OBJECT nid_objs[NUM_NID]={
 	NID_jurisdictionStateOrProvinceName,11,&(lvalues[6232]),0},
 {"jurisdictionC","jurisdictionCountryName",
 	NID_jurisdictionCountryName,11,&(lvalues[6243]),0},
-};
+{"proxyAuth","TLS Web Proxy Authentication",NID_proxy_auth,5,
+	&(lvalues[6254]),0};
 
 static const unsigned int sn_objs[NUM_SN]={
 364,	/* "AD_DVCS" */
@@ -3468,6 +3470,7 @@ static const unsigned int sn_objs[NUM_SN]={
 503,	/* "x500UniqueIdentifier" */
 158,	/* "x509Certificate" */
 160,	/* "x509Crl" */
+958,	/* "proxyAuth" */
 };
 
 static const unsigned int ln_objs[NUM_LN]={
@@ -5315,5 +5318,6 @@ static const unsigned int obj_objs[NUM_OBJ]={
 955,	/* OBJ_jurisdictionLocalityName     1 3 6 1 4 1 311 60 2 1 1 */
 956,	/* OBJ_jurisdictionStateOrProvinceName 1 3 6 1 4 1 311 60 2 1 2 */
 957,	/* OBJ_jurisdictionCountryName      1 3 6 1 4 1 311 60 2 1 3 */
+958,	/* OBJ_proxy_auth                  1 2 3 4 5 */
 };
 
