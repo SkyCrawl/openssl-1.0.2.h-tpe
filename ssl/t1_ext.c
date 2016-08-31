@@ -55,6 +55,8 @@
 
 /* Custom extension utility functions */
 
+#include <stdio.h>
+#include <openssl/x509v3.h>
 #include "ssl_locl.h"
 
 #ifndef OPENSSL_NO_TLSEXT
@@ -87,27 +89,42 @@ certain values that you don’t need to mind (or verify):)
 #define TLS12_TPE_OUTRO STR(This is the end of the message and nothing else \
 must follow.)
 
-unsigned char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size) {
+// forward declare some functions:
+int TLS12_TPE_get_utf(X509_NAME* name, int nid, char** value);
+int TLS12_TPE_append_line_to_art(char* art, int* pos, const int* size,
+		const char* prefix, const char* value);
+int TLS12_TPE_append_line_to_art_with_pattern(char* art, int* pos,
+		const int* size, const char* pattern, const char* prefix,
+		const char* value);
+
+/*
+ * The one method that constructs the signed artifact (TPE extension).
+ */
+char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size) {
 	/*
 	 * Allocate the result artifact.
 	 */
 
-	long pos = 0;
-	const long size = TLS12_TPE_ARTIFACT_MAX_SIZE;
-	unsigned char* buff = (unsigned char*) OPENSSL_malloc(size);
+	int pos = 0;
+	const int size = TLS12_TPE_ARTIFACT_MAX_SIZE;
+	char* buff = (char*) OPENSSL_malloc(size);
 	if(buff == NULL) {
 		return NULL;
 	}
 
 	/*
-	 * Determine the hash to use.
+	 * Declare variables & determine the hash to use.
 	 */
 
+	// declare vars;
+	unsigned int digest_size = EVP_MAX_MD_SIZE;
+	unsigned char digest[digest_size];
+	char* encoded = NULL;
 	const SSL_CIPHER* cipher = SSL_get_current_cipher(s);
 	const long cryptoHashCode = SSL_get_hash_code_from_cipher(cipher);
-	EVP_MD* cryptoHashFromCipher = SSL_get_hash_from_code(cryptoHashCode);
+	const EVP_MD* cryptoHashFromCipher = SSL_get_hash_from_code(cryptoHashCode);
 
-	unsigned char* cryptoHashName;
+	char* cryptoHashName = NULL;
 	switch (cryptoHashCode) {
 		case SSL_MD5:
 			cryptoHashName = "MD5";
@@ -133,8 +150,8 @@ unsigned char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size) {
 	const X509* server_certificate = s->server ?
 			ssl_get_server_send_pkey(s)->x509 :
 			s->session->sess_cert->peer_key->x509;
-	const X509_NAME* x509_name = server_certificate->cert_info->subject;
-	unsigned char* x509_value = NULL;
+	X509_NAME* x509_name = server_certificate->cert_info->subject;
+	char* x509_value = NULL;
 	int ret;
 
 	// fill intro
@@ -238,11 +255,8 @@ unsigned char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size) {
 	}
 
 	// fill the server's certificate's encoded fingerprint
-	unsigned int digest_size = EVP_MAX_MD_SIZE;
-	unsigned char digest[digest_size];
-	char* encoded;
 	if(!EVP_Digest((void*)server_certificate->cert_info->enc.enc, server_certificate->cert_info->enc.len,
-			&digest, &digest_size, cryptoHashFromCipher, NULL)) {
+			&(digest[0]), &digest_size, cryptoHashFromCipher, NULL)) {
 		goto err; // could not compute the hash for some reason...
 	} else if((encoded = hex_to_string(&(digest[0]), digest_size)) == NULL) {
 		goto err; // not enough memory...
@@ -295,7 +309,7 @@ unsigned char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size) {
 	}
 	digest_size = EVP_MAX_MD_SIZE + 1;
 	if(!EVP_Digest((void*)s->proxy_pubkey_tmp, s->proxy_pubkey_tmp_len,
-			&digest, &digest_size, cryptoHashFromCipher, NULL)) {
+			&(digest[0]), &digest_size, cryptoHashFromCipher, NULL)) {
 		goto err; // could not compute the hash for some reason...
 	} else if((encoded = hex_to_string(&(digest[0]), digest_size)) == NULL) {
 		goto err; // not enough memory...
@@ -329,7 +343,7 @@ unsigned char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size) {
 	}
 }
 
-int TLS12_TPE_get_utf(X509_NAME* name, int nid, unsigned char** value) {
+int TLS12_TPE_get_utf(X509_NAME* name, int nid, char** value) {
 	int idx = X509_NAME_get_index_by_NID(name, nid, -1);
 	if(idx != -1) // found
 	{
@@ -338,11 +352,11 @@ int TLS12_TPE_get_utf(X509_NAME* name, int nid, unsigned char** value) {
 		if(entry->value->length <= 0) { // just in case check
 			return 0;
 		}
-		unsigned char* result = (unsigned char*) OPENSSL_malloc(entry->value->length + 1);
+		char* result = (char*) OPENSSL_malloc(entry->value->length + 1);
 		if(result == NULL) {
 			return -1; // TODO: proper OpenSSL error handling ???
 		}
-		memset(result, entry->value->data, entry->value->length);
+		memcpy(result, entry->value->data, entry->value->length);
 		result[entry->value->length] = '\0';
 		*value = result;
 		// entry->value->type; // TODO: UTF8 encoding...
@@ -359,8 +373,8 @@ int TLS12_TPE_append_line_to_art(char* art, int* pos, const int* size, const cha
 }
 
 int TLS12_TPE_append_line_to_art_with_pattern(char* art, int* pos, const int* size, const char* pattern, const char* prefix, const char* value) {
-	int bytes_left = *size - *pos;
-	int ret = snprintf(&(art[pos]), bytes_left, pattern, prefix, value);
+	size_t bytes_left = *size - *pos;
+	int ret = snprintf(&(art[*pos]), bytes_left, pattern, prefix, value);
 	if((ret > 0) && (ret < bytes_left)) {
 		*pos += ret;
 		return 1;
@@ -586,7 +600,9 @@ int SSL_extension_supported(unsigned int ext_type)
     case TLSEXT_TYPE_ec_point_formats:
     case TLSEXT_TYPE_elliptic_curves:
     case TLSEXT_TYPE_heartbeat:
+#ifndef OPENSSL_NO_NEXTPROTONEG
     case TLSEXT_TYPE_next_proto_neg:
+#endif
     case TLSEXT_TYPE_padding:
     case TLSEXT_TYPE_renegotiate:
     case TLSEXT_TYPE_server_name:

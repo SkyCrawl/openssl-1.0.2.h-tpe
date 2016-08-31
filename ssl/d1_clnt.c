@@ -497,7 +497,7 @@ int dtls1_connect(SSL *s)
         case SSL3_ST_CW_KEY_EXCH_A:
         case SSL3_ST_CW_KEY_EXCH_B:
             dtls1_start_timer(s);
-            ret = ssl3_send_client_key_exchange(s);
+            ret = ssl3_send_client_key_exchange(s, SSL_get_peer_cert(s));
             if (ret <= 0)
                 goto end;
 

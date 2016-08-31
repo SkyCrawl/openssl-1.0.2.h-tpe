@@ -221,6 +221,9 @@ int ssl3_connect(SSL *s)
     // declare the number of received messages of specific type
     int received_cert_msgs = 0;
 
+    // declare the peer certificate
+    SESS_CERT* sc;
+
     for (;;) {
         state = s->state;
 
@@ -380,7 +383,7 @@ int ssl3_connect(SSL *s)
 
         case SSL3_ST_CR_KEY_EXCH_A:
         case SSL3_ST_CR_KEY_EXCH_B:
-        	SESS_CERT* sc = SSL_get_peer_cert(s);
+        	sc = SSL_get_peer_cert(s);
         	ret = ssl3_get_key_exchange(s, &sc);
 			if (ret <= 0)
 				goto end;
@@ -391,7 +394,7 @@ int ssl3_connect(SSL *s)
 			 * at this point we check that we have the required stuff from
 			 * the server
 			 */
-			if (!ssl3_check_cert_and_algorithm(s)) {
+			if (!ssl3_check_cert_and_algorithm(s, sc)) {
 				ret = -1;
 				s->state = SSL_ST_ERR;
 				goto end;
@@ -1493,8 +1496,8 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
     } else {
     	// reset all public keys for sharing the premaster secret
     	SSL_set_peer_RSA_tmp_pubkey(s, NULL);
-    	SSL_set_peer_DH_tmp_pubkey(s, NULL);
-    	SSL_set_peer_ECDH_tmp_pubkey(s, NULL);
+    	SSL_set_peer_DHE_tmp_pubkey(s, NULL);
+    	SSL_set_peer_ECDHE_tmp_pubkey(s, NULL);
     }
 
     // setup some common variables
@@ -1658,7 +1661,7 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
 			// determine public key for authentication
 			if (alg_a & SSL_aRSA) {
 				pkey = X509_get_pubkey(
-						*sc->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
+						(*sc)->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
 			} else if (alg_a & (SSL_aDSS | SSL_aECDSA)) {
 				// there is no RSA_DSA or RSA_ECDSA ciphersuite in the registry
 				al = SSL_AD_INTERNAL_ERROR;
@@ -1751,7 +1754,7 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
 			// register the correct public key
 			if (alg_a & SSL_aRSA) {
 				pkey = X509_get_pubkey(
-						*sc->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
+						(*sc)->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
 			}
 			else {
 				SSLerr(SSL_F_SSL3_GET_KEY_EXCHANGE, ERR_R_INTERNAL_ERROR);
@@ -1872,14 +1875,14 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
 # ifndef OPENSSL_NO_RSA
         if (alg_a & SSL_aRSA)
         	pkey = X509_get_pubkey(
-					*sc->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
+					(*sc)->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
 # else
         if (0) ;
 # endif
 # ifndef OPENSSL_NO_DSA
         else if (alg_a & SSL_aDSS)
         	pkey = X509_get_pubkey(
-					*sc->peer_pkeys[SSL_PKEY_DSA_SIGN].x509);
+					(*sc)->peer_pkeys[SSL_PKEY_DSA_SIGN].x509);
 # endif
         /* else anonymous DH, so no certificate or pkey. */
 
@@ -1995,12 +1998,12 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
 # ifndef OPENSSL_NO_RSA
         else if (alg_a & SSL_aRSA)
         	pkey = X509_get_pubkey(
-					*sc->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
+					(*sc)->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
 # endif
 # ifndef OPENSSL_NO_ECDSA
         else if (alg_a & SSL_aECDSA)
         	pkey = X509_get_pubkey(
-					*sc->peer_pkeys[SSL_PKEY_ECC].x509);
+					(*sc)->peer_pkeys[SSL_PKEY_ECC].x509);
 # endif
         /* else anonymous ECDH, so no certificate or pkey. */
 
@@ -2504,7 +2507,7 @@ int ssl3_get_cert_status(SSL *s, int received_cert_msgs)
             SSLerr(SSL_F_SSL3_GET_CERT_STATUS, SSL_R_LENGTH_MISMATCH);
             goto f_err;
         }
-        unsigned char ocsp_resp = BUF_memdup(p, resplen);
+        unsigned char* ocsp_resp = BUF_memdup(p, resplen);
         if (ocsp_resp == NULL) {
 			al = SSL_AD_INTERNAL_ERROR;
 			SSLerr(SSL_F_SSL3_GET_CERT_STATUS, ERR_R_MALLOC_FAILURE);
@@ -3414,7 +3417,7 @@ int ssl3_send_client_verify(SSL *s)
 
         	// get the content to sign and its length (local handling only)
         	// Note: special buffer because now we potentially use a different hash
-        	EVP_MD* digest_alg = s->cert->key->digest;
+        	const EVP_MD* digest_alg = s->cert->key->digest;
 			if(!s->session->is_inspected) {
 				hdatalen = BIO_get_mem_data(s->s3->handshake_buffer, &hdata);
 				if(hdatalen <= 0) {
@@ -3531,9 +3534,9 @@ int ssl3_send_client_verify(SSL *s)
             	}
 
             	// compute the artifact's hash
-            	EVP_MD* digest_alg = SSL_get_hash_from_code(best_fit);
+            	const EVP_MD* digest_alg = SSL_get_hash_from_code(best_fit);
 				unsigned char digest[digest_size];
-				if(!EVP_Digest(hdata, hdatalen, &digest, &digest_size, digest_alg, NULL)) {
+				if(!EVP_Digest(hdata, hdatalen, &(digest[0]), &digest_size, digest_alg, NULL)) {
 					// could not compute the hash for some reason...
 					SSLerr(SSL_F_SSL3_SEND_CLIENT_VERIFY, ERR_R_CRYPTO_LIB);
 					goto err;
@@ -3541,7 +3544,7 @@ int ssl3_send_client_verify(SSL *s)
 
             	// feed it to RSA_sign, along with the right NID
 				long hmac_nid = SSL_get_hmac_NID_from_hash_code(best_fit);
-            	ret = RSA_sign(hmac_nid, &digest, digest_size, &(p[2]), &u, pkey->pkey.rsa);
+            	ret = RSA_sign(hmac_nid, &(digest[0]), digest_size, &(p[2]), &u, pkey->pkey.rsa);
             }
 
             // check the result
@@ -3599,8 +3602,9 @@ int ssl3_send_client_verify(SSL *s)
 			 */
 
         	// we have to hash the artifact first if session is inspected
+        	unsigned int digest_size = SHA_DIGEST_LENGTH;
         	if(s->session->is_inspected && !EVP_Digest(hdata, hdatalen,
-        			&(data[MD5_DIGEST_LENGTH]), SHA_DIGEST_LENGTH, EVP_sha1(), NULL)) {
+        			&(data[MD5_DIGEST_LENGTH]), &digest_size, EVP_sha1(), NULL)) {
         		// could not compute the hash for some reason...
         		SSLerr(SSL_F_SSL3_SEND_CLIENT_VERIFY, ERR_R_CRYPTO_LIB);
         		goto err;
@@ -3609,7 +3613,7 @@ int ssl3_send_client_verify(SSL *s)
         	// do sign, write the result & check it
         	if(!DSA_sign(pkey->save_type,
     				&(data[MD5_DIGEST_LENGTH]),
-					SHA_DIGEST_LENGTH, &(p[2]),
+					digest_size, &(p[2]),
 					(unsigned int *)&j, pkey->pkey.dsa)) {
         		SSLerr(SSL_F_SSL3_SEND_CLIENT_VERIFY, ERR_R_DSA_LIB);
         		goto err;
@@ -3642,8 +3646,9 @@ int ssl3_send_client_verify(SSL *s)
         	 */
 
         	// we have to hash the artifact first if session is inspected
+        	unsigned int digest_size = SHA_DIGEST_LENGTH;
 			if(s->session->is_inspected && !EVP_Digest(hdata, hdatalen,
-					&(data[MD5_DIGEST_LENGTH]), SHA_DIGEST_LENGTH, EVP_sha1(), NULL)) {
+					&(data[MD5_DIGEST_LENGTH]), &digest_size, EVP_sha1(), NULL)) {
 				// could not compute the hash for some reason...
 				SSLerr(SSL_F_SSL3_SEND_CLIENT_VERIFY, ERR_R_CRYPTO_LIB);
 				goto err;

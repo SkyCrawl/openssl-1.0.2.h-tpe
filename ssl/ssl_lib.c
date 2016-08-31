@@ -1625,7 +1625,7 @@ RSA* SSL_get_peer_RSA_tmp_pubkey(const SSL* s)
 	return s->session->is_inspected ? s->session->proxy_cert->peer_rsa_tmp :
 			s->session->sess_cert->peer_rsa_tmp;
 }
-void SSL_set_peer_RSA_tmp_pubkey(const SSL* s, const RSA* key)
+void SSL_set_peer_RSA_tmp_pubkey(const SSL* s, RSA* key)
 {
 	if(s->session->is_inspected) {
 		if(s->session->proxy_cert->peer_rsa_tmp != NULL) {
@@ -1647,7 +1647,7 @@ DH* SSL_get_peer_DHE_tmp_pubkey(const SSL* s)
 	return s->session->is_inspected ? s->session->proxy_cert->peer_dh_tmp :
 			s->session->sess_cert->peer_dh_tmp;
 }
-void SSL_set_peer_DHE_tmp_pubkey(const SSL* s, const DH* key)
+void SSL_set_peer_DHE_tmp_pubkey(const SSL* s, DH* key)
 {
 	if(s->session->is_inspected) {
 		if(s->session->proxy_cert->peer_dh_tmp != NULL) {
@@ -1669,7 +1669,7 @@ EC_KEY* SSL_get_peer_ECDHE_tmp_pubkey(const SSL* s)
 	return s->session->is_inspected ? s->session->proxy_cert->peer_ecdh_tmp :
 			s->session->sess_cert->peer_ecdh_tmp;
 }
-void SSL_set_peer_ECDHE_tmp_pubkey(const SSL* s, const EC_KEY* key)
+void SSL_set_peer_ECDHE_tmp_pubkey(const SSL* s, EC_KEY* key)
 {
 	if(s->session->is_inspected) {
 		if(s->session->proxy_cert->peer_ecdh_tmp != NULL) {

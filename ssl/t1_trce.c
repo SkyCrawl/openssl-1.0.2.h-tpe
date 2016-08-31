@@ -366,8 +366,10 @@ static ssl_trace_tbl ssl_exts_tbl[] = {
     {TLSEXT_TYPE_opaque_prf_input, "opaque_prf_input"},
 # endif
     {TLSEXT_TYPE_renegotiate, "renegotiate"},
+# ifndef OPENSSL_NO_NEXTPROTONEG
     {TLSEXT_TYPE_next_proto_neg, "next_proto_neg"},
-    {TLSEXT_TYPE_padding, "padding"}
+# endif
+    {TLSEXT_TYPE_padding, "padding"},
     /* Label for TPE when printing Hello messages  */
     {TLSEXT_TYPE_trustworthy_proxy, "direct_endpoint"}
 };

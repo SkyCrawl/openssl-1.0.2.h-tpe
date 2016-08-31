@@ -1064,6 +1064,27 @@ int ssl_get_new_session(SSL *s, int session);
 int ssl_get_prev_session(SSL *s, unsigned char *session, int len,
                          const unsigned char *limit);
 SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket);
+
+/* some new methods for TPE */
+char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size);
+const long SSL_get_hash_code_from_cipher(const SSL_CIPHER* cipher);
+const EVP_MD *SSL_get_hash_from_code(const long cryptoHashCode);
+const long SSL_get_hmac_NID_from_hash_code(const long cryptoHashCode);
+const long SSL_get_byte_strength_from_hash_code(const long cryptoHashCode);
+const long SSL_get_weaker_from_hash_code(const long cryptoHashCode);
+RSA* SSL_get_peer_RSA_tmp_pubkey(const SSL* s);
+void SSL_set_peer_RSA_tmp_pubkey(const SSL* s, RSA* key);
+DH* SSL_get_peer_DHE_tmp_pubkey(const SSL* s);
+void SSL_set_peer_DHE_tmp_pubkey(const SSL* s, DH* key);
+EC_KEY* SSL_get_peer_ECDHE_tmp_pubkey(const SSL* s);
+void SSL_set_peer_ECDHE_tmp_pubkey(const SSL* s, EC_KEY* key);
+int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
+		unsigned data_len, int *al);
+void ssl3_decide_on_client_auth(SSL* s);
+int tls12_is_cipher_compatible_with_TPE(SSL *s);
+SESS_CERT* SSL_get_peer_cert(const SSL *s);
+/* this is where the new methods end */
+
 int ssl_cipher_id_cmp(const SSL_CIPHER *a, const SSL_CIPHER *b);
 DECLARE_OBJ_BSEARCH_GLOBAL_CMP_FN(SSL_CIPHER, SSL_CIPHER, ssl_cipher_id);
 int ssl_cipher_ptr_id_cmp(const SSL_CIPHER *const *ap,
@@ -1271,10 +1292,10 @@ int ssl3_get_server_done(SSL *s);
 int ssl3_send_client_verify(SSL *s);
 int ssl3_send_client_certificate(SSL *s);
 int ssl_do_client_cert_cb(SSL *s, X509 **px509, EVP_PKEY **ppkey);
-int ssl3_send_client_key_exchange(SSL *s);
-int ssl3_get_key_exchange(SSL *s);
+int ssl3_send_client_key_exchange(SSL *s, SESS_CERT* sc);
+int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc);
 int ssl3_get_certificate(SSL *s, int received_cert_msgs);
-int ssl3_check_cert_and_algorithm(SSL *s);
+int ssl3_check_cert_and_algorithm(SSL *s, SESS_CERT* sc);
 #  ifndef OPENSSL_NO_TLSEXT
 #   ifndef OPENSSL_NO_NEXTPROTONEG
 int ssl3_send_next_proto(SSL *s);
@@ -1420,7 +1441,7 @@ long ssl_get_algorithm2(SSL *s);
 int tls1_save_sigalgs(SSL *s, const unsigned char *data, int dsize);
 int tls1_process_sigalgs(SSL *s);
 size_t tls12_get_psigalgs(SSL *s, const unsigned char **psigs);
-int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s,
+int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s, SESS_CERT* sc,
                             const unsigned char *sig, EVP_PKEY *pkey);
 void ssl_set_client_disabled(SSL *s);
 

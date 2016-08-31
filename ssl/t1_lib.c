@@ -2507,7 +2507,7 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p,
         	 */
         	ssl3_decide_on_client_auth(s);
 
-        	if (tls12_tpe_handle_client_hello(s, data, size, al))
+        	if (!tls12_tpe_handle_client_hello(s, data, size, al))
         		return 0;
         }
 
@@ -2545,7 +2545,7 @@ err:
  * al: a pointer to the alert value to send in the event of a failure.
  * returns 0 on success, 1 on failure
  */
-static int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
+int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
 		unsigned data_len, int *al)
 {
 	// first the necessary conditions
@@ -2572,7 +2572,7 @@ static int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
 			// if server doesn't allow inspection, deny it
 			if(!ok) {
 				*al = SSL_AD_INSPECTION_DENIED;
-				return 1;
+				return 0;
 			}
 		} else {
 			/*
@@ -2586,14 +2586,14 @@ static int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
 			// announce illegal behaviour in this branch
 			if(!ok) {
 				*al = SSL_AD_ILLEGAL_PARAMETER;
-				return 1;
+				return 0;
 			}
 		}
 
 		// now onto handling the extension data
 		if (data_len != sizeof(unsigned char)) {
 			*al = TLS1_AD_DECODE_ERROR;
-			return 1;
+			return 0;
 		} else { // everything OK thus far
 			int value = data[0];
 			switch (value) {
@@ -2611,11 +2611,14 @@ static int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
 
 			// log having seen the extension in ClientHello
 			s->tpe_included = 1;
+
+			// and finally, return
+			return 1;
 		}
 	} else {
 		// unsupported conditions
 		*al = SSL_AD_ILLEGAL_PARAMETER;
-		return 1;
+		return 0;
 	}
 }
 
@@ -3304,7 +3307,7 @@ int ssl_check_clienthello_tlsext_late(SSL *s)
          * et al can pick it up.
          */
         s->cert->key = certpkey;
-        r = s->ctx->tlsext_status_cb(s, s->ctx->tlsext_status_arg);
+        r = s->ctx->tlsext_status_cb(s, -1, s->ctx->tlsext_status_arg);
         switch (r) {
             /* We don't want to send a status request response */
         case SSL_TLSEXT_ERR_NOACK:
@@ -3435,7 +3438,7 @@ int ssl_check_serverhello_tlsext(SSL *s)
          * Call callback with resp == NULL and resplen == -1 so callback
          * knows there is no response
          */
-        r = s->ctx->tlsext_status_cb(s, s->ctx->tlsext_status_arg);
+        r = s->ctx->tlsext_status_cb(s, -1, s->ctx->tlsext_status_arg);
         if (r == 0) {
             al = SSL_AD_BAD_CERTIFICATE_STATUS_RESPONSE;
             ret = SSL_TLSEXT_ERR_ALERT_FATAL;
@@ -3747,7 +3750,7 @@ static tls12_lookup tls12_sig[] = {
 
 int tls12_is_cipher_compatible_with_TPE(SSL *s)
 {
-	SSL_CIPHER* cipher = SSL_get_current_cipher(s);
+	const SSL_CIPHER* cipher = SSL_get_current_cipher(s);
 	if (!(cipher->algorithm_mkey & (SSL_kRSA | SSL_kDHE | SSL_kECDHE)))
 	{
 		// DH, ECDH, PSK, SRP, KRB5, GOST not supported at the moment

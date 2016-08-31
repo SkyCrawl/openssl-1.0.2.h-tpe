@@ -3126,9 +3126,9 @@ int ssl3_get_cert_verify(SSL *s)
 			}
 
 			// compute the artifact's hash
-			EVP_MD* digest_alg = SSL_get_hash_from_code(best_fit);
+			const EVP_MD* digest_alg = SSL_get_hash_from_code(best_fit);
 			unsigned char digest[digest_size];
-			if(!EVP_Digest(hdata, hdatalen, &digest, &digest_size, digest_alg, NULL)) {
+			if(!EVP_Digest(hdata, hdatalen, &(digest[0]), &digest_size, digest_alg, NULL)) {
 				// could not compute the hash for some reason...
 				al = SSL_AD_INTERNAL_ERROR;
 				SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_CRYPTO_LIB);
@@ -3137,7 +3137,7 @@ int ssl3_get_cert_verify(SSL *s)
 
 			// and finally, verify the signature, along with the right NID
 			long hmac_nid = SSL_get_hmac_NID_from_hash_code(best_fit);
-			i = RSA_verify(hmac_nid, &digest, digest_size, p, i, pkey->pkey.rsa);
+			i = RSA_verify(hmac_nid, &(digest[0]), digest_size, p, i, pkey->pkey.rsa);
     	}
 
     	// check result
@@ -3164,7 +3164,8 @@ int ssl3_get_cert_verify(SSL *s)
     	} else {
     		// we have to hash the artifact first
     		unsigned char digest[SHA_DIGEST_LENGTH];
-			if(!EVP_Digest(hdata, hdatalen, &digest, SHA_DIGEST_LENGTH, EVP_sha1(), NULL)) {
+    		unsigned int digest_size = SHA_DIGEST_LENGTH;
+			if(!EVP_Digest(hdata, hdatalen, &(digest[0]), &digest_size, EVP_sha1(), NULL)) {
 				// could not compute the hash for some reason...
 				al = SSL_AD_INTERNAL_ERROR;
 				SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_CRYPTO_LIB);
@@ -3172,7 +3173,7 @@ int ssl3_get_cert_verify(SSL *s)
 			}
 
 			// and finally, verify the signature
-			j = DSA_verify(pkey->save_type, &digest, SHA_DIGEST_LENGTH,
+			j = DSA_verify(pkey->save_type, &(digest[0]), digest_size,
 					p, i, pkey->pkey.dsa);
     	}
 
@@ -3196,7 +3197,8 @@ int ssl3_get_cert_verify(SSL *s)
     	} else {
     		// we have to hash the artifact first
 			unsigned char digest[SHA_DIGEST_LENGTH];
-			if(!EVP_Digest(hdata, hdatalen, &digest, SHA_DIGEST_LENGTH, EVP_sha1(), NULL)) {
+			unsigned int digest_size = SHA_DIGEST_LENGTH;
+			if(!EVP_Digest(hdata, hdatalen, &(digest[0]), &digest_size, EVP_sha1(), NULL)) {
 				// could not compute the hash for some reason...
 				al = SSL_AD_INTERNAL_ERROR;
 				SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_CRYPTO_LIB);
@@ -3204,7 +3206,7 @@ int ssl3_get_cert_verify(SSL *s)
 			}
 
 			// and finally, verify the signature
-			j = ECDSA_verify(pkey->save_type, &digest, SHA_DIGEST_LENGTH,
+			j = ECDSA_verify(pkey->save_type, &(digest[0]), digest_size,
 					p, i, pkey->pkey.ec);
     	}
 

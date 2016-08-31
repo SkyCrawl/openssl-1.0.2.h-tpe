@@ -701,15 +701,15 @@ int X509_STORE_CTX_contains_cert(X509_STORE_CTX *ctx, X509 *cert)
 		int idx = X509_OBJECT_idx_by_subject(ctx->ctx->objs, X509_LU_X509, subject_name);
 		if (idx != -1) { // just in case check but should be true (the call above)
 			for (int i = idx; i < sk_X509_OBJECT_num(ctx->ctx->objs); i++) {
-				obj = sk_X509_OBJECT_value(ctx->ctx->objs, i);
+				X509_OBJECT* obj2 = sk_X509_OBJECT_value(ctx->ctx->objs, i);
 
 				// see if we've run past the matches
-				if (obj->type != X509_LU_X509) {
+				if (obj2->type != X509_LU_X509) {
 					break;
 				}
 
 				// if not, compare...
-				if (X509_cmp(cert, obj.data.x509)) {
+				if (X509_cmp(cert, obj2->data.x509)) {
 					ret = 1;
 					break;
 				}

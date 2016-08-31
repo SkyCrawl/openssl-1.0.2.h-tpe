@@ -774,11 +774,11 @@ int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int server_cert_chain)
     if((i > 0) && !server_cert_chain) {
     	// Note: the trusted and verified path was built into ctx->chain
     	// Note: verification of KU extension values should be handled elsewhere
-    	int cert_count = sk_X509_num(ctx->chain);
+    	int cert_count = sk_X509_num(ctx.chain);
     	int trust_anchor_found = 0;
     	for(int cert_index = cert_count - 1; cert_index >= 0; cert_index--) {
     		// initialize & determine basic information
-    		X509* cert = sk_X509_value(ctx->chain, cert_index);
+    		X509* cert = sk_X509_value(ctx.chain, cert_index);
     		// Note: we iterate the certificates from root to end-entity, as required by the algorithm
     		int is_end_entity = cert_index == 0;
 
@@ -800,7 +800,7 @@ int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int server_cert_chain)
     		int contains_proxy_auth = contains_critical_xku ? cert->ex_xkusage & XKU_SSL_PROXY : 0;
 
     		// determine whether linked trust store contains the certificate
-    		int is_trusted = X509_STORE_CTX_contains_cert(ctx, cert);
+    		int is_trusted = X509_STORE_CTX_contains_cert(&ctx, cert);
 
     		// check inspection permissions
 			if(!is_end_entity)
