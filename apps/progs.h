@@ -25,6 +25,7 @@ extern int gendsa_main(int argc, char *argv[]);
 extern int genpkey_main(int argc, char *argv[]);
 extern int s_server_main(int argc, char *argv[]);
 extern int s_client_main(int argc, char *argv[]);
+extern int s_proxy_main(int argc, char *argv[]);
 extern int speed_main(int argc, char *argv[]);
 extern int s_time_main(int argc, char *argv[]);
 extern int version_main(int argc, char *argv[]);
@@ -112,6 +113,9 @@ FUNCTION functions[] = {
 #endif
 #if !defined(OPENSSL_NO_SOCK)
     {FUNC_TYPE_GENERAL, "s_client", s_client_main},
+#endif
+#if !defined(OPENSSL_NO_SOCK)
+    {FUNC_TYPE_GENERAL, "s_proxy", s_proxy_main},
 #endif
 #ifndef OPENSSL_NO_SPEED
     {FUNC_TYPE_GENERAL, "speed", speed_main},
