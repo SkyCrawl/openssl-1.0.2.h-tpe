@@ -147,7 +147,7 @@ char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size) {
 	 * Construct the artifact.
 	 */
 
-	const X509* server_certificate = s->server ?
+	const X509* server_certificate = SSL_is_server(s) ?
 			ssl_get_server_send_pkey(s)->x509 :
 			s->session->sess_cert->peer_key->x509;
 	X509_NAME* x509_name = server_certificate->cert_info->subject;

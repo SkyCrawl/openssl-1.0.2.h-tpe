@@ -211,6 +211,15 @@ static int ssl_check_srp_ext_ClientHello(SSL *s, int *al)
 
 int ssl3_accept(SSL *s)
 {
+	/*
+	 * First a little special handling...
+	 * Sorry OpenSSL developers but this hack was the only way.
+	 * Otherwise, it would really be a pain to implement the proxy.
+	 */
+	if(SSL_is_proxy(s)) {
+		return tls12_prx_accept(s);
+	}
+
     BUF_MEM *buf;
     unsigned long alg_k, Time = (unsigned long)time(NULL);
     void (*cb) (const SSL *ssl, int type, int val) = NULL;
@@ -260,7 +269,7 @@ int ssl3_accept(SSL *s)
         case SSL_ST_BEFORE | SSL_ST_ACCEPT:
         case SSL_ST_OK | SSL_ST_ACCEPT:
 
-            s->server = 1;
+            s->role = SSL_ROLE_SERVER;
             if (cb != NULL)
                 cb(s, SSL_CB_HANDSHAKE_START, 1);
 

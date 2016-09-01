@@ -3445,7 +3445,7 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
         if (larg == SSL_CERT_SET_SERVER) {
             CERT_PKEY *cpk;
             const SSL_CIPHER *cipher;
-            if (!s->server)
+            if (SSL_is_client(s))
                 return 0;
             cipher = s->s3->tmp.new_cipher;
             if (!cipher)
@@ -3523,7 +3523,7 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
     case SSL_CTRL_GET_CLIENT_CERT_TYPES:
         {
             const unsigned char **pctype = parg;
-            if (s->server || !s->s3->tmp.cert_req)
+            if (SSL_is_server(s) || !s->s3->tmp.cert_req)
                 return 0;
             if (s->cert->ctypes) {
                 if (pctype)
@@ -3536,7 +3536,7 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
         }
 
     case SSL_CTRL_SET_CLIENT_CERT_TYPES:
-        if (!s->server)
+        if (SSL_is_client(s))
             return 0;
         return ssl3_set_req_cert_type(s->cert, parg, larg);
 
@@ -3566,7 +3566,7 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
             return 0;
 
     case SSL_CTRL_GET_SERVER_TMP_KEY:
-        if (s->server || !s->session || !SSL_get_peer_cert(s))
+        if (SSL_is_server(s) || !s->session || !SSL_get_peer_cert(s))
             return 0;
         else {
             EVP_PKEY *ptmp;

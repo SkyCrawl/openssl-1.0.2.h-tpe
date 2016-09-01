@@ -138,7 +138,7 @@ int dtls1_new(SSL *s)
     d1->sent_messages = pqueue_new();
     d1->buffered_app_data.q = pqueue_new();
 
-    if (s->server) {
+    if (SSL_is_server(s)) {
         d1->cookie_len = sizeof(s->d1->cookie);
     }
 
@@ -252,7 +252,7 @@ void dtls1_clear(SSL *s)
 
         memset(s->d1, 0, sizeof(*(s->d1)));
 
-        if (s->server) {
+        if (SSL_is_server(s)) {
             s->d1->cookie_len = sizeof(s->d1->cookie);
         }
 

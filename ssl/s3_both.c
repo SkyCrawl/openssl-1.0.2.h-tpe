@@ -380,7 +380,7 @@ long ssl3_get_message(SSL *s, int st1, int stn, int mt, long max, int *ok)
             }
 
             skip_message = 0;
-            if (!s->server)
+            if (SSL_is_client(s))
                 if (p[0] == SSL3_MT_HELLO_REQUEST)
                     /*
                      * The server may always send 'Hello Request' messages --

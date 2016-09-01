@@ -1083,6 +1083,8 @@ int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
 void ssl3_decide_on_client_auth(SSL* s);
 int tls12_is_cipher_compatible_with_TPE(SSL *s);
 SESS_CERT* SSL_get_peer_cert(const SSL *s);
+int tls12_prx_accept(SSL *s);
+int tls12_prx_connect(SSL *s);
 /* this is where the new methods end */
 
 int ssl_cipher_id_cmp(const SSL_CIPHER *a, const SSL_CIPHER *b);

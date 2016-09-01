@@ -187,6 +187,15 @@ IMPLEMENT_ssl3_meth_func(SSLv3_client_method,
 #endif
 int ssl3_connect(SSL *s)
 {
+	/*
+	 * First a little special handling...
+	 * Sorry OpenSSL developers but this hack was the only way.
+	 * Otherwise, it would really be a pain to implement the proxy.
+	 */
+	if(SSL_is_proxy(s)) {
+		return tls12_prx_connect(s);
+	}
+
     BUF_MEM *buf = NULL;
     unsigned long Time = (unsigned long)time(NULL);
     void (*cb) (const SSL *ssl, int type, int val) = NULL;
@@ -238,7 +247,7 @@ int ssl3_connect(SSL *s)
         case SSL_ST_BEFORE | SSL_ST_CONNECT:
         case SSL_ST_OK | SSL_ST_CONNECT:
 
-            s->server = 0; // this method handles handshake as seen from the client
+            s->role = SSL_ROLE_CLIENT;
             if (cb != NULL)
                 cb(s, SSL_CB_HANDSHAKE_START, 1);
 

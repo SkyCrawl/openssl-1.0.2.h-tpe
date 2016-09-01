@@ -225,7 +225,7 @@ int SSL_clear(SSL *s)
 
     s->type = 0;
 
-    s->state = SSL_ST_BEFORE | ((s->server) ? SSL_ST_ACCEPT : SSL_ST_CONNECT);
+    s->state = SSL_ST_BEFORE | (SSL_is_server(s) ? SSL_ST_ACCEPT : SSL_ST_CONNECT);
 
     s->version = s->method->version;
     s->client_version = s->version;
@@ -418,7 +418,8 @@ SSL *SSL_new(SSL_CTX *ctx)
     if (!s->method->ssl_new(s))
         goto err;
 
-    s->server = (ctx->method->ssl_accept == ssl_undefined_function) ? 0 : 1;
+    s->role = (ctx->method->ssl_accept == ssl_undefined_function) ?
+    		SSL_ROLE_CLIENT : SSL_ROLE_SERVER;
 
     SSL_clear(s);
 
@@ -2880,7 +2881,7 @@ int SSL_do_handshake(SSL *s)
  */
 void SSL_set_accept_state(SSL *s)
 {
-    s->server = 1;
+    s->role = SSL_ROLE_SERVER;
     s->shutdown = 0;
     s->state = SSL_ST_ACCEPT | SSL_ST_BEFORE;
     s->handshake_func = s->method->ssl_accept;
@@ -2892,7 +2893,7 @@ void SSL_set_accept_state(SSL *s)
 
 void SSL_set_connect_state(SSL *s)
 {
-    s->server = 0;
+    s->role = SSL_ROLE_CLIENT;
     s->shutdown = 0;
     s->state = SSL_ST_CONNECT | SSL_ST_BEFORE;
     s->handshake_func = s->method->ssl_connect;
@@ -3024,7 +3025,7 @@ SSL *SSL_dup(SSL *s)
     ret->rwstate = s->rwstate;
     ret->in_handshake = s->in_handshake;
     ret->handshake_func = s->handshake_func;
-    ret->server = s->server;
+    ret->role = s->role;
     ret->renegotiate = s->renegotiate;
     ret->new_session = s->new_session;
     ret->quiet_shutdown = s->quiet_shutdown;
@@ -3351,7 +3352,7 @@ SSL_CTX *SSL_set_SSL_CTX(SSL *ssl, SSL_CTX *ctx)
     ssl->cert = ssl_cert_dup(ctx->cert);
     if (ocert) {
         /* Preserve any already negotiated parameters */
-        if (ssl->server) {
+        if (SSL_is_server(ssl)) {
             ssl->cert->peer_sigalgs = ocert->peer_sigalgs;
             ssl->cert->peer_sigalgslen = ocert->peer_sigalgslen;
             ocert->peer_sigalgs = NULL;
@@ -3735,7 +3736,17 @@ int SSL_cache_hit(SSL *s)
 
 int SSL_is_server(SSL *s)
 {
-    return s->server;
+    return s->role == SSL_ROLE_SERVER;
+}
+
+int SSL_is_client(SSL *s)
+{
+    return s->role == SSL_ROLE_CLIENT;
+}
+
+int SSL_is_proxy(SSL *s)
+{
+    return s->role == SSL_ROLE_PROXY;
 }
 
 #if defined(_WINDLL) && defined(OPENSSL_SYS_WIN16)

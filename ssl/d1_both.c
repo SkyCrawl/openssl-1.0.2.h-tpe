@@ -934,7 +934,7 @@ dtls1_get_message_fragment(SSL *s, int st1, int stn, long max, int *ok)
     if (frag_len && frag_len < len)
         return dtls1_reassemble_fragment(s, &msg_hdr, ok);
 
-    if (!s->server && s->d1->r_msg_hdr.frag_off == 0 &&
+    if (SSL_is_client(s) && s->d1->r_msg_hdr.frag_off == 0 &&
         wire[0] == SSL3_MT_HELLO_REQUEST) {
         /*
          * The server may always send 'Hello Request' messages -- we are

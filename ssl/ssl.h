@@ -350,6 +350,13 @@ extern "C" {
 # define SSL_SENT_SHUTDOWN       1
 # define SSL_RECEIVED_SHUTDOWN   2
 
+/* Define SSL roles */
+# define SSL_ROLE_SERVER		 1
+# define SSL_ROLE_CLIENT		 2
+# define SSL_ROLE_PROXY			 3
+
+# define SSL_RECEIVED_SHUTDOWN   2
+
 #ifdef __cplusplus
 }
 #endif
@@ -1517,8 +1524,8 @@ struct ssl_st {
      * handshake_func is == 0 until then, we use this test instead of an
      * "init" member.
      */
-    /* are we the server side? - mostly used by SSL_clear */
-    int server;
+    /* What role are we? Server, client or proxy? */
+    int role;
     /*
      * Generate a new session or reuse an old one.
      * NB: For servers, the 'new' session may actually be a previously
@@ -2644,6 +2651,8 @@ int SSL_set_session_secret_cb(SSL *s,
 void SSL_set_debug(SSL *s, int debug);
 int SSL_cache_hit(SSL *s);
 int SSL_is_server(SSL *s);
+int SSL_is_client(SSL *s);
+int SSL_is_proxy(SSL *s);
 
 SSL_CONF_CTX *SSL_CONF_CTX_new(void);
 int SSL_CONF_CTX_finish(SSL_CONF_CTX *cctx);

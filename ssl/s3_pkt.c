@@ -1344,7 +1344,7 @@ int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
      */
 
     /* If we are a client, check for an incoming 'Hello Request': */
-    if ((!s->server) &&
+    if (SSL_is_client(s) &&
         (s->s3->handshake_fragment_len >= 4) &&
         (s->s3->handshake_fragment[0] == SSL3_MT_HELLO_REQUEST) &&
         (s->session != NULL) && (s->session->cipher != NULL)) {
@@ -1406,7 +1406,7 @@ int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
      * allowed send back a no renegotiation alert and carry on. WARNING:
      * experimental code, needs reviewing (steve)
      */
-    if (s->server &&
+    if (SSL_is_server(s) &&
         SSL_is_init_finished(s) &&
         !s->s3->send_connection_binding &&
         (s->version > SSL3_VERSION) &&
@@ -1544,7 +1544,7 @@ int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
             s->state = SSL_ST_BEFORE | (s->server)
                 ? SSL_ST_ACCEPT : SSL_ST_CONNECT;
 #else
-            s->state = s->server ? SSL_ST_ACCEPT : SSL_ST_CONNECT;
+            s->state = SSL_is_server(s) ? SSL_ST_ACCEPT : SSL_ST_CONNECT;
 #endif
             s->renegotiate = 1;
             s->new_session = 1;
