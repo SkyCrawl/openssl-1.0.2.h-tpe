@@ -1,7 +1,10 @@
 /* apps/s_proxy.c */
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
+/*
+ * Copyright (C) 1995-1998 Jiří Smolík (smolikj@e-trends.cz)
  * All rights reserved.
- *
+ */
+
+/*
  * This package is an SSL implementation written
  * by Eric Young (eay@cryptsoft.com).
  * The implementation was written so as to conform with Netscapes SSL.
@@ -149,17 +152,41 @@
 #include <assert.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/errno.h>
 
-// openssl includes
+/*
+ * OpenSSL 's_server' includes.
+ */
 #include <openssl/e_os2.h>
-#include <openssl/ssl/ssl.h>
-#include <openssl/ssl/ssl_locl.h>
-#include <openssl/ssl/ssl3.h>
-#include <openssl/ssl/dtls1.h>
-#include <openssl/crypto/bio/bio.h>
-#include "s_apps.h"
+#include <openssl/lhash.h>
+
+// a little 'server-client' extra...
+#define USE_SOCKETS
+
 #include "apps.h"
+#include <openssl/err.h>
+#include <openssl/ocsp.h>
+#include <openssl/pem.h>
+#include <openssl/rand.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#ifndef OPENSSL_NO_DH
+# include <openssl/dh.h>
+#endif
+#ifndef OPENSSL_NO_RSA
+# include <openssl/rsa.h>
+#endif
+
+/*
+ * Additional OpenSSL 's_client' includes.
+ */
+
+#include <openssl/bn.h>
+#include "s_apps.h"
 #include "timeouts.h"
+
+// #include <openssl/ssl3.h>
+// #include <openssl/bio.h>
 
 /*
  * Server definitions.
@@ -175,20 +202,19 @@
 #define SERVER_PORT PORT
 #define SSL_HOST_NAME "localhost"
 
+// TODO:
+#define TEST_CERT "../ssl/certs/..."
+
 /*
- * Custom structures.
+ * -----------------------------------------------------------------
+ * Data structures.
+ * -----------------------------------------------------------------
  */
 
-// create the proxy's method flow for TLS 1.2
-IMPLEMENT_tls_meth_func(
-		TLS1_2_VERSION,
-		TLS12_prx_method,
-		tls12_prx_accept,
-		tls12_prx_connect,
-		tls1_get_method, // TODO:
-		TLSv1_2_enc_data)
-
-/* Structure passed to cert status callback */
+/*
+ * Structure passed to certificate status callback. Taken
+ * from 's_server'.
+ */
 typedef struct tlsextstatusctx_st {
     /* Default responder to use */
     char *host, *path, *port;
@@ -199,7 +225,25 @@ typedef struct tlsextstatusctx_st {
 } Status_cb_ctx;
 
 /*
+ * By default, 's_server' uses an in-memory cache which caches SSL_SESSION
+ * structures without any serialisation. This hides some bugs which only
+ * become apparent in deployed servers. By implementing a basic external
+ * session cache some issues can be debugged using 's_server'.
+ * Fully taken from 's_server'.
+ */
+
+typedef struct simple_ssl_session_st {
+    unsigned char *id;
+    unsigned int idlen;
+    unsigned char *der;
+    int derlen;
+    struct simple_ssl_session_st *next;
+} simple_ssl_session;
+
+/*
+ * -----------------------------------------------------------------
  * Global variables.
+ * -----------------------------------------------------------------
  */
 
 static int accept_socket = -1;
@@ -211,7 +255,7 @@ static BIO *sp_bio_out = NULL;
 static BIO *sp_bio_msg = NULL;
 static BIO *sp_bio_err = NULL;
 
-static SSL* conn_server = NULL;
+static SSL* conn_to_server = NULL;
 static SSL* conn_to_client = NULL;
 
 static char *sp_key_file = NULL;
@@ -233,12 +277,14 @@ static STACK_OF(OPENSSL_STRING) *ssl_args = NULL;
 
 static int s_tlsextstatus = 0;
 static int s_debug = 0;
+static int s_crlf = 0;
 static int sp_msg = 0;
 static int sp_quiet = 0;
 static int c_ign_eof = 0;
 static int bufsize = SERVER_BUFSIZZ;
 
 static Status_cb_ctx tlscstatp = { NULL, NULL, NULL, 0, -1, NULL, 0 };
+static simple_ssl_session *first = NULL;
 
 /*
  * -----------------------------------------------------------------
@@ -246,7 +292,240 @@ static Status_cb_ctx tlscstatp = { NULL, NULL, NULL, 0, -1, NULL, 0 };
  * -----------------------------------------------------------------
  */
 
-static int accept_client_connection()
+static void prx_print_usage()
+{
+	BIO_printf(sp_bio_err, "usage: s_proxy [args ...]\n");
+	BIO_printf(sp_bio_err, "\n");
+	BIO_printf(sp_bio_err, " -s_host arg   - server hostname to connect to (default is '%s')\n", SSL_HOST_NAME);
+	BIO_printf(sp_bio_err, " -s_port arg   - server port to connect to (default is %d)\n", SERVER_PORT);
+	BIO_printf(sp_bio_err, " -p_port arg   - proxy port to accept on (default is %d)\n", PROXY_PORT);
+	BIO_printf(sp_bio_err, " -cert arg     - certificate file to use (default is %s)\n", TEST_CERT);
+	BIO_printf(sp_bio_err, " -certform arg - certificate format (PEM or DER; default is PEM)\n");
+	BIO_printf(sp_bio_err, " -key arg      - private key file to use, if not in certificate file\n");
+	BIO_printf(sp_bio_err, "                 (default is %s)\n", TEST_CERT);
+	BIO_printf(sp_bio_err, " -keyform arg  - private key format (PEM or DER; default is PEM)\n");
+	BIO_printf(sp_bio_err, " -pass arg     - private key pass phrase source\n");
+	BIO_printf(sp_bio_err, " -debug        - print more output\n");
+	BIO_printf(sp_bio_err, " -status       - respond to certificate status requests\n");
+	BIO_printf(sp_bio_err, " -msg          - show protocol messages\n");
+	BIO_printf(sp_bio_err, " -state        - print the SSL states\n");
+	BIO_printf(sp_bio_err, " -crlf         - convert LF from terminal into CRLF\n");
+	BIO_printf(sp_bio_err, " -quiet        - silent mode (no output)\n");
+}
+
+static void prx_print_stats(BIO *bio, SSL_CTX *ssl_ctx)
+{
+    BIO_printf(bio, "%4ld items in the session cache\n",
+               SSL_CTX_sess_number(ssl_ctx));
+    BIO_printf(bio, "%4ld client connects (SSL_connect())\n",
+               SSL_CTX_sess_connect(ssl_ctx));
+    BIO_printf(bio, "%4ld client renegotiates (SSL_connect())\n",
+               SSL_CTX_sess_connect_renegotiate(ssl_ctx));
+    BIO_printf(bio, "%4ld client connects that finished\n",
+               SSL_CTX_sess_connect_good(ssl_ctx));
+    BIO_printf(bio, "%4ld server accepts (SSL_accept())\n",
+               SSL_CTX_sess_accept(ssl_ctx));
+    BIO_printf(bio, "%4ld server renegotiates (SSL_accept())\n",
+               SSL_CTX_sess_accept_renegotiate(ssl_ctx));
+    BIO_printf(bio, "%4ld server accepts that finished\n",
+               SSL_CTX_sess_accept_good(ssl_ctx));
+    BIO_printf(bio, "%4ld session cache hits\n", SSL_CTX_sess_hits(ssl_ctx));
+    BIO_printf(bio, "%4ld session cache misses\n",
+               SSL_CTX_sess_misses(ssl_ctx));
+    BIO_printf(bio, "%4ld session cache timeouts\n",
+               SSL_CTX_sess_timeouts(ssl_ctx));
+    BIO_printf(bio, "%4ld callback cache hits\n",
+               SSL_CTX_sess_cb_hits(ssl_ctx));
+    BIO_printf(bio, "%4ld cache full overflows (%ld allowed)\n",
+               SSL_CTX_sess_cache_full(ssl_ctx),
+               SSL_CTX_sess_get_cache_size(ssl_ctx));
+}
+
+/*
+ * Function taken from 's_client' and adjusted. Removed:
+ * - SRTP handling.
+ * - Export key material handling.
+ * - Printing the full certificate chain.
+ * The first is not compatible with the TPE extension.
+ * The second is just not needed for our little showcase.
+ * The third requires a CLI option that is not available
+ * in the 's_proxy' tool (but can be added).
+ */
+static void prx_print_stuff(BIO *bio, SSL *s, int full)
+{
+    X509 *peer = NULL;
+    char *p;
+    static const char *space = "                ";
+    char buf[BUFSIZ];
+    STACK_OF(X509) *sk;
+    STACK_OF(X509_NAME) *sk2;
+    const SSL_CIPHER *c;
+    X509_NAME *xn;
+    int j, i;
+#ifndef OPENSSL_NO_COMP
+    const COMP_METHOD *comp, *expansion;
+#endif
+
+    if (full) {
+        int got_a_chain = 0;
+
+        sk = SSL_get_peer_cert_chain(s);
+        if (sk != NULL) {
+            got_a_chain = 1;    /* we don't have it for SSL2 (yet) */
+
+            BIO_printf(bio, "---\nCertificate chain\n");
+            for (i = 0; i < sk_X509_num(sk); i++) {
+                X509_NAME_oneline(X509_get_subject_name(sk_X509_value(sk, i)),
+                                  buf, sizeof buf);
+                BIO_printf(bio, "%2d s:%s\n", i, buf);
+                X509_NAME_oneline(X509_get_issuer_name(sk_X509_value(sk, i)),
+                                  buf, sizeof buf);
+                BIO_printf(bio, "   i:%s\n", buf);
+            }
+        }
+
+        BIO_printf(bio, "---\n");
+        peer = SSL_get_peer_x509(s);
+        if (peer != NULL) {
+            BIO_printf(bio, "Server certificate\n");
+
+            /* Redundant if we showed the whole chain */
+            X509_NAME_oneline(X509_get_subject_name(peer), buf, sizeof buf);
+            BIO_printf(bio, "subject=%s\n", buf);
+            X509_NAME_oneline(X509_get_issuer_name(peer), buf, sizeof buf);
+            BIO_printf(bio, "issuer=%s\n", buf);
+        } else
+            BIO_printf(bio, "no peer certificate available\n");
+
+        sk2 = SSL_get_client_CA_list(s);
+        if ((sk2 != NULL) && (sk_X509_NAME_num(sk2) > 0)) {
+            BIO_printf(bio, "---\nAcceptable client certificate CA names\n");
+            for (i = 0; i < sk_X509_NAME_num(sk2); i++) {
+                xn = sk_X509_NAME_value(sk2, i);
+                X509_NAME_oneline(xn, buf, sizeof(buf));
+                BIO_write(bio, buf, strlen(buf));
+                BIO_write(bio, "\n", 1);
+            }
+        } else {
+            BIO_printf(bio, "---\nNo client certificate CA names sent\n");
+        }
+        p = SSL_get_shared_ciphers(s, buf, sizeof buf);
+        if (p != NULL) {
+            /*
+             * This works only for SSL 2.  In later protocol versions, the
+             * client does not know what other ciphers (in addition to the
+             * one to be used in the current connection) the server supports.
+             */
+
+            BIO_printf(bio,
+                       "---\nCiphers common between both SSL endpoints:\n");
+            j = i = 0;
+            while (*p) {
+                if (*p == ':') {
+                    BIO_write(bio, space, 15 - j % 25);
+                    i++;
+                    j = 0;
+                    BIO_write(bio, ((i % 3) ? " " : "\n"), 1);
+                } else {
+                    BIO_write(bio, p, 1);
+                    j++;
+                }
+                p++;
+            }
+            BIO_write(bio, "\n", 1);
+        }
+
+        ssl_print_sigalgs(bio, s);
+        ssl_print_tmp_key(bio, s);
+
+        BIO_printf(bio,
+                   "---\nSSL handshake has read %ld bytes and written %ld bytes\n",
+                   BIO_number_read(SSL_get_rbio(s)),
+                   BIO_number_written(SSL_get_wbio(s)));
+    }
+    BIO_printf(bio, (SSL_cache_hit(s) ? "---\nReused, " : "---\nNew, "));
+    c = SSL_get_current_cipher(s);
+    BIO_printf(bio, "%s, Cipher is %s\n",
+               SSL_CIPHER_get_version(c), SSL_CIPHER_get_name(c));
+    if (peer != NULL) {
+        EVP_PKEY *pktmp;
+        pktmp = X509_get_pubkey(peer);
+        BIO_printf(bio, "Server public key is %d bit\n",
+                   EVP_PKEY_bits(pktmp));
+        EVP_PKEY_free(pktmp);
+    }
+    BIO_printf(bio, "Secure Renegotiation IS%s supported\n",
+               SSL_get_secure_renegotiation_support(s) ? "" : " NOT");
+#ifndef OPENSSL_NO_COMP
+    comp = SSL_get_current_compression(s);
+    expansion = SSL_get_current_expansion(s);
+    BIO_printf(bio, "Compression: %s\n",
+               comp ? SSL_COMP_get_name(comp) : "NONE");
+    BIO_printf(bio, "Expansion: %s\n",
+               expansion ? SSL_COMP_get_name(expansion) : "NONE");
+#endif
+
+#ifdef SSL_DEBUG
+    {
+        /* Print out local port of connection: useful for debugging */
+        int sock;
+        struct sockaddr_in ladd;
+        socklen_t ladd_size = sizeof(ladd);
+        sock = SSL_get_fd(s);
+        getsockname(sock, (struct sockaddr *)&ladd, &ladd_size);
+        BIO_printf(bio_c_out, "LOCAL PORT is %u\n", ntohs(ladd.sin_port));
+    }
+#endif
+
+#if !defined(OPENSSL_NO_TLSEXT)
+# if !defined(OPENSSL_NO_NEXTPROTONEG)
+    if (next_proto.status != -1) {
+        const unsigned char *proto;
+        unsigned int proto_len;
+        SSL_get0_next_proto_negotiated(s, &proto, &proto_len);
+        BIO_printf(bio, "Next protocol: (%d) ", next_proto.status);
+        BIO_write(bio, proto, proto_len);
+        BIO_write(bio, "\n", 1);
+    }
+# endif
+    {
+        const unsigned char *proto;
+        unsigned int proto_len;
+        SSL_get0_alpn_selected(s, &proto, &proto_len);
+        if (proto_len > 0) {
+            BIO_printf(bio, "ALPN protocol: ");
+            BIO_write(bio, proto, proto_len);
+            BIO_write(bio, "\n", 1);
+        } else
+            BIO_printf(bio, "No ALPN negotiated\n");
+    }
+#endif
+
+    SSL_SESSION_print(bio, SSL_get_session(s));
+    BIO_printf(bio, "---\n");
+    if (peer != NULL)
+        X509_free(peer);
+    /* flush, or debugging output gets mixed with http response */
+    (void)BIO_flush(bio);
+}
+
+/*
+ * Application callback to supply proxy's certificate status.
+ * This is called when a client includes a certificate status
+ * request extension.
+ */
+static int prx_cert_status_cb(SSL *s, void *arg)
+{
+	/*
+	 * As status information is not mandatory, we can just return...
+	 */
+    return SSL_TLSEXT_ERR_OK;
+}
+
+/*
+ * A function taken from 's_server'.
+ */
+static int prx_accept_client_conn()
 {
 	// declare vars
     int i;
@@ -325,7 +604,7 @@ static int accept_client_connection()
     return (1);
 }
 
-static void close_accept_socket(void)
+static void prx_close_accept_socket(void)
 {
     BIO_printf(sp_bio_err, "shutdown accept socket\n");
     if (accept_socket >= 0) {
@@ -333,53 +612,55 @@ static void close_accept_socket(void)
     }
 }
 
-static void prx_print_stats(BIO *bio, SSL_CTX *ssl_ctx)
+static void prx_shutdown()
 {
-    BIO_printf(bio, "%4ld items in the session cache\n",
-               SSL_CTX_sess_number(ssl_ctx));
-    BIO_printf(bio, "%4ld client connects (SSL_connect())\n",
-               SSL_CTX_sess_connect(ssl_ctx));
-    BIO_printf(bio, "%4ld client renegotiates (SSL_connect())\n",
-               SSL_CTX_sess_connect_renegotiate(ssl_ctx));
-    BIO_printf(bio, "%4ld client connects that finished\n",
-               SSL_CTX_sess_connect_good(ssl_ctx));
-    BIO_printf(bio, "%4ld server accepts (SSL_accept())\n",
-               SSL_CTX_sess_accept(ssl_ctx));
-    BIO_printf(bio, "%4ld server renegotiates (SSL_accept())\n",
-               SSL_CTX_sess_accept_renegotiate(ssl_ctx));
-    BIO_printf(bio, "%4ld server accepts that finished\n",
-               SSL_CTX_sess_accept_good(ssl_ctx));
-    BIO_printf(bio, "%4ld session cache hits\n", SSL_CTX_sess_hits(ssl_ctx));
-    BIO_printf(bio, "%4ld session cache misses\n",
-               SSL_CTX_sess_misses(ssl_ctx));
-    BIO_printf(bio, "%4ld session cache timeouts\n",
-               SSL_CTX_sess_timeouts(ssl_ctx));
-    BIO_printf(bio, "%4ld callback cache hits\n",
-               SSL_CTX_sess_cb_hits(ssl_ctx));
-    BIO_printf(bio, "%4ld cache full overflows (%ld allowed)\n",
-               SSL_CTX_sess_cache_full(ssl_ctx),
-               SSL_CTX_sess_get_cache_size(ssl_ctx));
+	// here we assume that the connections have been shut down already
+	if (ctx != NULL) {
+		SSL_CTX_free(ctx);
+	}
+	if (cctx_server != NULL) {
+		SSL_CONF_CTX_free(cctx_server);
+	}
+	if (cctx_client != NULL) {
+		SSL_CONF_CTX_free(cctx_client);
+	}
+	if (ssl_args) {
+		sk_OPENSSL_STRING_free(ssl_args);
+	}
+
+	// free buffers
+	if (sp_bio_out != NULL) {
+		BIO_free(sp_bio_out);
+		sp_bio_out = NULL;
+	}
+	if (sp_bio_msg != NULL) {
+		BIO_free(sp_bio_msg);
+		sp_bio_msg = NULL;
+	}
+
+	// free additional structures
+	if (sp_key) {
+		EVP_PKEY_free(sp_key);
+	}
+	if (sp_cert) {
+		X509_free(sp_cert);
+	}
+	if (sp_chain) {
+		sk_X509_pop_free(sp_chain, X509_free);
+	}
 }
 
-static void prx_print_usage()
+static void prx_free_sessions(void)
 {
-	BIO_printf(sp_bio_err, "usage: s_proxy [args ...]\n");
-	BIO_printf(sp_bio_err, "\n");
-	BIO_printf(sp_bio_err, " -s_host arg   - server hostname to connect to (default is '%d')\n", SSL_HOST_NAME);
-	BIO_printf(sp_bio_err, " -s_port arg   - server port to connect to (default is %d)\n", SERVER_PORT);
-	BIO_printf(sp_bio_err, " -p_port arg   - proxy port to accept on (default is %d)\n", PROXY_PORT);
-	BIO_printf(sp_bio_err, " -cert arg     - certificate file to use (default is %s)\n", TEST_CERT);
-	BIO_printf(sp_bio_err, " -certform arg - certificate format (PEM or DER; default is PEM)\n");
-	BIO_printf(sp_bio_err, " -key arg      - private key file to use, if not in certificate file\n");
-	BIO_printf(sp_bio_err, "                 (default is %s)\n", TEST_CERT);
-	BIO_printf(sp_bio_err, " -keyform arg  - private key format (PEM or DER; default is PEM)\n");
-	BIO_printf(sp_bio_err, " -pass arg     - private key pass phrase source\n");
-	BIO_printf(sp_bio_err, " -debug        - print more output\n");
-	BIO_printf(sp_bio_err, " -status       - respond to certificate status requests\n");
-	BIO_printf(sp_bio_err, " -msg          - show protocol messages\n");
-	BIO_printf(sp_bio_err, " -state        - print the SSL states\n");
-	BIO_printf(sp_bio_err, " -crlf         - convert LF from terminal into CRLF\n");
-	BIO_printf(sp_bio_err, " -quiet        - silent mode (no output)\n");
+    simple_ssl_session *sess, *tsess;
+    for (sess = first; sess;) {
+        OPENSSL_free(sess->id);
+        OPENSSL_free(sess->der);
+        tsess = sess;
+        sess = sess->next;
+        OPENSSL_free(tsess);
+    }
+    first = NULL;
 }
 
 /*
@@ -387,6 +668,9 @@ static void prx_print_usage()
  * Main.
  * -----------------------------------------------------------------
  */
+
+// first forward declare several functions
+static int prx_host(char *hostname, int s, int stype, unsigned char* context);
 
 int MAIN(int, char **);
 int MAIN(int argc, char *argv[])
@@ -427,7 +711,7 @@ int MAIN(int argc, char *argv[])
      * special handling of both connections - through the
      * argument function).
      */
-    ctx = SSL_CTX_new(TLS12_prx_method());
+    ctx = SSL_CTX_new(TLSv1_2_method());
 	if (ctx == NULL) {
 		ERR_print_errors(sp_bio_err);
 		goto end;
@@ -599,7 +883,7 @@ end:
     }
 
     prx_shutdown();
-    free_sessions(); // TODO:
+    prx_free_sessions();
     apps_shutdown();
     OPENSSL_EXIT(ret);
     return ret;
@@ -630,10 +914,15 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context)
     }
 
     if (conn_to_client == NULL) {
+    	// create the new connection
     	conn_to_client = SSL_new(ctx);
+
+    	// register self into it
+    	// TODO:
+
 #ifndef OPENSSL_NO_TLSEXT
         if (s_tlsextstatus) {
-            SSL_CTX_set_tlsext_status_cb(ctx, cert_status_cb);
+            SSL_CTX_set_tlsext_status_cb(ctx, prx_cert_status_cb);
             tlscstatp.err = sp_bio_err;
             SSL_CTX_set_tlsext_status_arg(ctx, &tlscstatp);
         }
@@ -646,14 +935,14 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context)
     SSL_set_accept_state(conn_to_client);
 
     if (s_debug) {
-        SSL_set_debug(conn_to_client);
+        SSL_set_debug(conn_to_client, s_debug);
         BIO_set_callback(SSL_get_rbio(conn_to_client), bio_dump_callback);
         BIO_set_callback_arg(SSL_get_rbio(conn_to_client), (char *)sp_bio_out);
     }
 
     if (sp_msg) {
 #ifndef OPENSSL_NO_SSL_TRACE
-        if (s_msg == 2)
+        if (sp_msg == 2)
             SSL_set_msg_callback(conn_to_client, SSL_trace);
         else
 #endif
@@ -745,7 +1034,7 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context)
                 if ((i <= 0) || (buf[0] == 'Q')) {
                     BIO_printf(sp_bio_out, "DONE\n");
                     SHUTDOWN(s);
-                    close_accept_socket();
+                    prx_close_accept_socket();
                     ret = -11;
                     goto err;
                 }
@@ -754,7 +1043,7 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context)
                     if (SSL_version(conn_to_client) != DTLS1_VERSION)
                         SHUTDOWN(s);
                     /*
-                     * close_accept_socket(); ret= -11;
+                     * prx_close_accept_socket(); ret= -11;
                      */
                     goto err;
                 }
@@ -847,7 +1136,7 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context)
         if (read_from_sslcon) {
             if (!SSL_is_init_finished(conn_to_client)) {
             	// TODO: proceed with proxy setup...
-            	i = accept_client_connection();
+            	i = prx_accept_client_conn();
 
                 if (i < 0) {
                     ret = 0;
@@ -944,7 +1233,7 @@ int prx_connect()
 #endif
 
     // create the target connection
-    conn_server = SSL_new(ctx);
+    conn_to_server = SSL_new(ctx);
 
  re_start:
 
@@ -961,7 +1250,7 @@ int prx_connect()
 
     // further initialization
     if (s_debug) {
-        SSL_set_debug(conn_server, 1);
+        SSL_set_debug(conn_to_server, 1);
         BIO_set_callback(sbio, bio_dump_callback);
         BIO_set_callback_arg(sbio, (char *)sp_bio_out);
     }
@@ -971,16 +1260,16 @@ int prx_connect()
             SSL_set_msg_callback(conn_to_client, SSL_trace);
         else
 #endif
-            SSL_set_msg_callback(conn_server, msg_cb);
-        SSL_set_msg_callback_arg(conn_server, sp_bio_msg ? sp_bio_msg : sp_bio_out);
+            SSL_set_msg_callback(conn_to_server, msg_cb);
+        SSL_set_msg_callback_arg(conn_to_server, sp_bio_msg ? sp_bio_msg : sp_bio_out);
     }
-    SSL_set_bio(conn_server, sbio, sbio);
+    SSL_set_bio(conn_to_server, sbio, sbio);
 
     // this is where the set the proxy's special handshake handling...
-    SSL_set_connect_state(conn_server);
+    SSL_set_connect_state(conn_to_server);
 
     // ok, lets connect...
-    width = SSL_get_fd(conn_server) + 1;
+    width = SSL_get_fd(conn_to_server) + 1;
 
     // declare more vars
     fd_set readfds, writefds;
@@ -1001,7 +1290,7 @@ int prx_connect()
 
         timeoutp = NULL;
 
-        if (SSL_in_init(conn_server) && !SSL_total_renegotiations(conn_server)) {
+        if (SSL_in_init(conn_to_server) && !SSL_total_renegotiations(conn_to_server)) {
             in_init = 1;
             tty_on = 0;
         } else {
@@ -1009,24 +1298,14 @@ int prx_connect()
             if (in_init) {
                 in_init = 0;
 
-                print_stuff(sp_bio_out, conn_server, full_log);
+                prx_print_stuff(sp_bio_out, conn_to_server, full_log);
                 if (full_log > 0) {
                     full_log--;
-                }
-
-                if (reconnect) {
-                    reconnect--;
-                    BIO_printf(sp_bio_out,
-                               "drop connection and then reconnect\n");
-                    SSL_shutdown(conn_server);
-                    SSL_set_connect_state(conn_server);
-                    SHUTDOWN(SSL_get_fd(conn_server));
-                    goto re_start;
                 }
             }
         }
 
-        ssl_pending = read_ssl && SSL_pending(conn_server);
+        ssl_pending = read_ssl && SSL_pending(conn_to_server);
 
         if (!ssl_pending) {
 #if !defined(OPENSSL_SYS_WINDOWS) && !defined(OPENSSL_SYS_MSDOS) && !defined(OPENSSL_SYS_NETWARE) && !defined (OPENSSL_SYS_BEOS_R5)
@@ -1039,18 +1318,18 @@ int prx_connect()
                 }
             }
             if (read_ssl) {
-                openssl_fdset(SSL_get_fd(conn_server), &readfds);
+                openssl_fdset(SSL_get_fd(conn_to_server), &readfds);
             }
             if (write_ssl) {
-                openssl_fdset(SSL_get_fd(conn_server), &writefds);
+                openssl_fdset(SSL_get_fd(conn_to_server), &writefds);
             }
 #else
             if (!tty_on || !write_tty) {
                 if (read_ssl) {
-                    openssl_fdset(SSL_get_fd(conn_server), &readfds);
+                    openssl_fdset(SSL_get_fd(conn_to_server), &readfds);
                 }
                 if (write_ssl) {
-                    openssl_fdset(SSL_get_fd(conn_server), &writefds);
+                    openssl_fdset(SSL_get_fd(conn_to_server), &writefds);
                 }
             }
 #endif
@@ -1138,9 +1417,9 @@ int prx_connect()
             }
         }
 
-        if (!ssl_pending && FD_ISSET(SSL_get_fd(conn_server), &writefds)) {
-            k = SSL_write(conn_server, &(cbuf[cbuf_off]), (unsigned int)cbuf_len);
-            switch (SSL_get_error(conn_server, k)) {
+        if (!ssl_pending && FD_ISSET(SSL_get_fd(conn_to_server), &writefds)) {
+            k = SSL_write(conn_to_server, &(cbuf[cbuf_off]), (unsigned int)cbuf_len);
+            switch (SSL_get_error(conn_to_server, k)) {
             case SSL_ERROR_NONE:
                 cbuf_off += k;
                 cbuf_len -= k;
@@ -1224,30 +1503,30 @@ int prx_connect()
         }
 
         // this is where we read from the connection...
-        else if (ssl_pending || FD_ISSET(SSL_get_fd(conn_server), &readfds)) {
+        else if (ssl_pending || FD_ISSET(SSL_get_fd(conn_to_server), &readfds)) {
 #ifdef RENEG
             {
                 static int iiii;
                 if (++iiii == 52) {
-                    SSL_renegotiate(conn_server);
+                    SSL_renegotiate(conn_to_server);
                     iiii = 0;
                 }
             }
 #endif
 #if 1
             // ok, we read... but how do we advance further FFS?
-            k = SSL_read(conn_server, sbuf, 1024 /* CLIENT_BUFSIZZ */ );
+            k = SSL_read(conn_to_server, sbuf, 1024 /* CLIENT_BUFSIZZ */ );
 #else
 /* Demo for pending and peek :-) */
-            k = SSL_read(conn_server, sbuf, 16);
+            k = SSL_read(conn_to_server, sbuf, 16);
             {
                 char zbuf[10240];
-                printf("read=%d pending=%d peek=%d\n", k, SSL_pending(conn_server),
-                       SSL_peek(conn_server, zbuf, 10240));
+                printf("read=%d pending=%d peek=%d\n", k, SSL_pending(conn_to_server),
+                       SSL_peek(conn_to_server, zbuf, 10240));
             }
 #endif
 
-            switch (SSL_get_error(conn_server, k)) {
+            switch (SSL_get_error(conn_to_server, k)) {
             case SSL_ERROR_NONE:
                 if (k <= 0)
                     goto end;
@@ -1333,13 +1612,13 @@ int prx_connect()
             // TODO: proceed with proxy renegotiation...
             if ((!c_ign_eof) && (cbuf[0] == 'R')) {
                 BIO_printf(sp_bio_err, "RENEGOTIATING\n");
-                SSL_renegotiate(conn_server);
+                SSL_renegotiate(conn_to_server);
                 cbuf_len = 0;
             }
 #ifndef OPENSSL_NO_HEARTBEATS
             else if ((!c_ign_eof) && (cbuf[0] == 'B')) {
                 BIO_printf(sp_bio_err, "HEARTBEATING\n");
-                SSL_heartbeat(conn_server);
+                SSL_heartbeat(conn_to_server);
                 cbuf_len = 0;
             }
 #endif
@@ -1412,7 +1691,7 @@ int prx_connect()
 
  shut:
     if (in_init) {
-        print_stuff(sp_bio_out, conn_server, full_log);
+    	prx_print_stuff(sp_bio_out, conn_to_server, full_log);
     }
 
  end:
@@ -1428,10 +1707,10 @@ int prx_connect()
         OPENSSL_cleanse(mbuf, CLIENT_BUFSIZZ);
         OPENSSL_free(mbuf);
     }
-    if (conn_server != NULL) {
-		SSL_shutdown(conn_server);
-		SHUTDOWN(SSL_get_fd(conn_server));
-		SSL_free(conn_server);
+    if (conn_to_server != NULL) {
+		SSL_shutdown(conn_to_server);
+		SHUTDOWN(SSL_get_fd(conn_to_server));
+		SSL_free(conn_to_server);
 	}
 
     apps_shutdown();
@@ -1439,78 +1718,15 @@ int prx_connect()
     return ret;
 }
 
-static void prx_shutdown()
-{
-	// here we assume that the connections have been shut down already
-	if (ctx != NULL) {
-		SSL_CTX_free(ctx);
-	}
-	if (cctx_server != NULL) {
-		SSL_CONF_CTX_free(cctx_server);
-	}
-	if (cctx_client != NULL) {
-		SSL_CONF_CTX_free(cctx_client);
-	}
-	if (ssl_args) {
-		sk_OPENSSL_STRING_free(ssl_args);
-	}
-
-	// free buffers
-	if (sp_bio_out != NULL) {
-		BIO_free(sp_bio_out);
-		sp_bio_out = NULL;
-	}
-	if (sp_bio_msg != NULL) {
-		BIO_free(sp_bio_msg);
-		sp_bio_msg = NULL;
-	}
-
-	// free additional structures
-	if (sp_key) {
-		EVP_PKEY_free(sp_key);
-	}
-	if (sp_cert) {
-		X509_free(sp_cert);
-	}
-	if (sp_chain) {
-		sk_X509_pop_free(sp_chain, X509_free);
-	}
-}
-
-int tls12_prx_accept(SSL* conn_client)
+int todo(void)
 {
 	// TODO:
-	return 0;
-}
-
-int tls12_prx_connect(SSL* conn_server)
-{
-	// TODO:
-	return 0;
-}
-
-/*
- * Certificate Status callback. This is called when a client includes a
- * certificate status request extension.
- */
-
-static int cert_status_cb(SSL *s, void *arg)
-{
-	// up to each and every single one whether they want to implement this
-    return 1;
-}
-
-int whatever(void)
-{
-	// TODO:
-	// /opensslconf.h
-	// #ifndef OPENSSL_NO_TS
 
 	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_CTX_set_ssl_ctx.html
-	SSL_CONF_CTX_set_ssl_ctx();
+	// SSL_CONF_CTX_set_ssl_ctx();
 
 	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_CTX_set_ssl.html
-	SSL_CONF_CTX_set_ssl();
+	// SSL_CONF_CTX_set_ssl();
 
 	// must read and implement!
 	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_CTX_set_flags.html

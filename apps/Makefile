@@ -37,7 +37,7 @@ EXE= $(PROGRAM)$(EXE_EXT)
 
 E_EXE=	verify asn1pars req dgst dh dhparam enc passwd gendh errstr \
 	ca crl rsa rsautl dsa dsaparam ec ecparam \
-	x509 genrsa gendsa genpkey s_server s_client speed \
+	x509 genrsa gendsa genpkey s_server s_client s_proxy speed \
 	s_time version pkcs7 cms crl2pkcs7 sess_id ciphers nseq pkcs12 \
 	pkcs8 pkey pkeyparam pkeyutl spkac smime rand engine ocsp prime ts srp
 
@@ -53,7 +53,7 @@ RAND_SRC=app_rand.c
 E_OBJ=	verify.o asn1pars.o req.o dgst.o dh.o dhparam.o enc.o passwd.o gendh.o errstr.o \
 	ca.o pkcs7.o crl2p7.o crl.o \
 	rsa.o rsautl.o dsa.o dsaparam.o ec.o ecparam.o \
-	x509.o genrsa.o gendsa.o genpkey.o s_server.o s_client.o speed.o \
+	x509.o genrsa.o gendsa.o genpkey.o s_server.o s_client.o s_proxy.o speed.o \
 	s_time.o $(A_OBJ) $(S_OBJ) $(RAND_OBJ) version.o sess_id.o \
 	ciphers.o nseq.o pkcs12.o pkcs8.o pkey.o pkeyparam.o pkeyutl.o \
 	spkac.o smime.o cms.o rand.o engine.o ocsp.o prime.o ts.o srp.o
@@ -61,7 +61,7 @@ E_OBJ=	verify.o asn1pars.o req.o dgst.o dh.o dhparam.o enc.o passwd.o gendh.o er
 E_SRC=	verify.c asn1pars.c req.c dgst.c dh.c enc.c passwd.c gendh.c errstr.c ca.c \
 	pkcs7.c crl2p7.c crl.c \
 	rsa.c rsautl.c dsa.c dsaparam.c ec.c ecparam.c \
-	x509.c genrsa.c gendsa.c genpkey.c s_server.c s_client.c speed.c \
+	x509.c genrsa.c gendsa.c genpkey.c s_server.c s_client.c s_proxy.c speed.c \
 	s_time.c $(A_SRC) $(S_SRC) $(RAND_SRC) version.c sess_id.c \
 	ciphers.c nseq.c pkcs12.c pkcs8.c pkey.c pkeyparam.c pkeyutl.c \
 	spkac.c smime.c cms.c rand.c engine.c ocsp.c prime.c ts.c srp.c
@@ -826,6 +826,29 @@ s_client.o: ../include/openssl/stack.h ../include/openssl/symhacks.h
 s_client.o: ../include/openssl/tls1.h ../include/openssl/txt_db.h
 s_client.o: ../include/openssl/x509.h ../include/openssl/x509_vfy.h
 s_client.o: ../include/openssl/x509v3.h apps.h s_apps.h s_client.c timeouts.h
+s_proxy.o: ../e_os.h ../include/openssl/asn1.h ../include/openssl/bio.h
+s_proxy.o: ../include/openssl/bn.h ../include/openssl/buffer.h
+s_proxy.o: ../include/openssl/comp.h ../include/openssl/conf.h
+s_proxy.o: ../include/openssl/crypto.h ../include/openssl/dh.h
+s_proxy.o: ../include/openssl/dtls1.h ../include/openssl/e_os2.h
+s_proxy.o: ../include/openssl/ec.h ../include/openssl/ecdh.h
+s_proxy.o: ../include/openssl/ecdsa.h ../include/openssl/engine.h
+s_proxy.o: ../include/openssl/err.h ../include/openssl/evp.h
+s_proxy.o: ../include/openssl/hmac.h ../include/openssl/kssl.h
+s_proxy.o: ../include/openssl/lhash.h ../include/openssl/obj_mac.h
+s_proxy.o: ../include/openssl/objects.h ../include/openssl/ocsp.h
+s_proxy.o: ../include/openssl/opensslconf.h ../include/openssl/opensslv.h
+s_proxy.o: ../include/openssl/ossl_typ.h ../include/openssl/pem.h
+s_proxy.o: ../include/openssl/pem2.h ../include/openssl/pkcs7.h
+s_proxy.o: ../include/openssl/pqueue.h ../include/openssl/rand.h
+s_proxy.o: ../include/openssl/rsa.h ../include/openssl/safestack.h
+s_proxy.o: ../include/openssl/sha.h ../include/openssl/srtp.h
+s_proxy.o: ../include/openssl/ssl.h ../include/openssl/ssl2.h
+s_proxy.o: ../include/openssl/ssl23.h ../include/openssl/ssl3.h
+s_proxy.o: ../include/openssl/stack.h ../include/openssl/symhacks.h
+s_proxy.o: ../include/openssl/tls1.h ../include/openssl/txt_db.h
+s_proxy.o: ../include/openssl/x509.h ../include/openssl/x509_vfy.h
+s_proxy.o: ../include/openssl/x509v3.h apps.h s_apps.h s_proxy.c timeouts.h
 s_server.o: ../e_os.h ../include/openssl/asn1.h ../include/openssl/bio.h
 s_server.o: ../include/openssl/bn.h ../include/openssl/buffer.h
 s_server.o: ../include/openssl/comp.h ../include/openssl/conf.h
