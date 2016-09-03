@@ -275,11 +275,8 @@ SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket)
 
     dest->references = 1;
 
-    // TODO:
     if (src->sess_cert != NULL)
         CRYPTO_add(&src->sess_cert->references, 1, CRYPTO_LOCK_SSL_SESS_CERT);
-
-    // TODO:
     if (src->peer != NULL)
         CRYPTO_add(&src->peer->references, 1, CRYPTO_LOCK_X509);
 
@@ -885,10 +882,13 @@ void SSL_SESSION_free(SSL_SESSION *ss)
     OPENSSL_cleanse(ss->key_arg, sizeof ss->key_arg);
     OPENSSL_cleanse(ss->master_key, sizeof ss->master_key);
     OPENSSL_cleanse(ss->session_id, sizeof ss->session_id);
-    // TODO:
+    /*
+     * If independent key exchange is ever supported for the TPE extension,
+     * make sure we're not freeing the same thing (e.g. 'sess_cert' and
+     * 'proxy_cert').
+     */
     if (ss->sess_cert != NULL)
         ssl_sess_cert_free(ss->sess_cert);
-    // TODO:
     if (ss->peer != NULL)
         X509_free(ss->peer);
     if (ss->ciphers != NULL)

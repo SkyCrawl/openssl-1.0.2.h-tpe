@@ -1371,6 +1371,8 @@ void SSL_CTX_set_alpn_select_cb(SSL_CTX *ctx,
                                            void *arg), void *arg);
 void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data,
                             unsigned *len);
+int SSL_was_tpe_included(const SSL *ssl);
+int SSL_is_session_inspected(const SSL *ssl);
 
 # ifndef OPENSSL_NO_PSK
 /*

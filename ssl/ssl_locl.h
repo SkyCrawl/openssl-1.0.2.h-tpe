@@ -1078,8 +1078,6 @@ DH* SSL_get_peer_DHE_tmp_pubkey(const SSL* s);
 void SSL_set_peer_DHE_tmp_pubkey(const SSL* s, DH* key);
 EC_KEY* SSL_get_peer_ECDHE_tmp_pubkey(const SSL* s);
 void SSL_set_peer_ECDHE_tmp_pubkey(const SSL* s, EC_KEY* key);
-int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
-		unsigned data_len, int *al);
 void ssl3_decide_on_client_auth(SSL* s);
 int tls12_is_cipher_compatible_with_TPE(SSL *s);
 SESS_CERT* SSL_get_peer_cert(const SSL *s);

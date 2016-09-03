@@ -1568,27 +1568,27 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
     	 * We can only do this when we're creating a new session
     	 * or resume an inspected session.
     	 */
-    	int ok;
-    	if (s->new_session) {
-    		/*
-			 * When creating a new session, the client must allow
-			 * inspection, either globally or specifically for this
-			 * connection.
+    	int do_send_tpe;
+    	if (!s->renegotiate || s->new_session) {
+			/*
+			 * When creating a new session (renegotiation or not),
+			 * the client must allow inspection, either globally
+			 * or specifically for this connection.
 			 */
-    		// TODO: callback
-    		ok = SSL_CTX_get_tpe_support(s->ctx);
-    	} else {
-    		/*
-			 * When resuming a session, the original decision prevails
-			 * as the extension's definition imposes the session's
-			 * inspection status on every new connection bound to
-			 * that session.
+			// TODO: callback
+			do_send_tpe = SSL_CTX_get_tpe_support(s->ctx);
+		} else {
+			/*
+			 * When resuming an older session, the original decision
+			 * prevails as the extension's definition imposes the
+			 * session's inspection status on every new connection
+			 * bound to that session.
 			 */
-    		ok = s->session->is_inspected;
-    	}
+			do_send_tpe = s->session->is_inspected;
+		}
 
     	// with this, all conditions regarding TPE have been asserted
-    	if(ok) {
+    	if(do_send_tpe) {
     		// check for enough space
 			if ((limit - ret - 5) < 0) {
 				return NULL;
@@ -2494,21 +2494,20 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p,
                 return 0;
         }
 # endif
-        // let this be the last extension we process
+        // let this be the last extension we process in here
         else if (type == TLSEXT_TYPE_trustworthy_proxy) {
-        	/*
-        	 * The reason why TPE should be processed last.
-        	 * Decision whether we allow TPE should also
-        	 * depend on client authentication (more details
-        	 * in the function called below).
-        	 * Decision on client authentication depends on
-        	 * the chosen ciphersuite so make sure to satisfy
-        	 * the requirement.
-        	 */
-        	ssl3_decide_on_client_auth(s);
-
-        	if (!tls12_tpe_handle_client_hello(s, data, size, al))
+        	// perform only the basic checks in here
+        	if (SSL_IS_DTLS(s) || (s->version < TLS1_2_VERSION)) {
+        		// unsupported conditions
+        		*al = SSL_AD_ILLEGAL_PARAMETER;
         		return 0;
+        	} else if (size != sizeof(unsigned char)) {
+        		*al = TLS1_AD_DECODE_ERROR;
+        		return 0;
+        	} else { // if the conditions are right
+        		// save the value for later
+        		s->tpe_included = 1 + data[0];
+        	}
         }
 
         data += size;
@@ -2536,90 +2535,6 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p,
 err:
     *al = SSL_AD_DECODE_ERROR;
     return 0;
-}
-
-/*
- * Process the TPE extension in a ClientHello.
- * data: the contents of the extension, not including the type and length
- * data_len: the number of bytes in 'data'
- * al: a pointer to the alert value to send in the event of a failure.
- * returns 0 on success, 1 on failure
- */
-int tls12_tpe_handle_client_hello(SSL *s, const unsigned char *data,
-		unsigned data_len, int *al)
-{
-	// first the necessary conditions
-	if(!SSL_IS_DTLS(s) && (s->version >= TLS1_2_VERSION) &&
-			tls12_is_cipher_compatible_with_TPE(s)) {
-		/*
-		 * We can only do this when we're creating a new session
-		 * or resume an inspected session.
-		 */
-		int ok = 0;
-		if(!s->hit) {
-			/*
-			 * When creating a new session, the server must allow
-			 * inspection globally and check if it's only enabled
-			 * for regular sessions without client authentication.
-			 */
-			if (s->s3->tmp.cert_request) {
-				ok = SSL_CTX_get_tpe_support(s->ctx) &&
-					!SSL_CTX_get_tpe_client_anon_only(s->ctx);
-			} else {
-				ok = SSL_CTX_get_tpe_support(s->ctx);
-			}
-
-			// if server doesn't allow inspection, deny it
-			if(!ok) {
-				*al = SSL_AD_INSPECTION_DENIED;
-				return 0;
-			}
-		} else {
-			/*
-			 * When resuming a session, the original decision prevails
-			 * as the extension's definition imposes the session's
-			 * inspection status on every new connection bound to
-			 * that session.
-			 */
-			ok = s->session->is_inspected;
-
-			// announce illegal behaviour in this branch
-			if(!ok) {
-				*al = SSL_AD_ILLEGAL_PARAMETER;
-				return 0;
-			}
-		}
-
-		// now onto handling the extension data
-		if (data_len != sizeof(unsigned char)) {
-			*al = TLS1_AD_DECODE_ERROR;
-			return 0;
-		} else { // everything OK thus far
-			int value = data[0];
-			switch (value) {
-			case TLSEXT_TPE_CLIENT:
-				// nothing to be done, handshake continues as usual
-				break;
-			case TLSEXT_TPE_PROXY:
-				// inspection activated
-				s->session->is_inspected = 1;
-				break;
-			default: // including TLSEXT_TPE_SERVER
-				*al = SSL_AD_ILLEGAL_PARAMETER;
-				return 1;
-			}
-
-			// log having seen the extension in ClientHello
-			s->tpe_included = 1;
-
-			// and finally, return
-			return 1;
-		}
-	} else {
-		// unsupported conditions
-		*al = SSL_AD_ILLEGAL_PARAMETER;
-		return 0;
-	}
 }
 
 /*
@@ -3326,11 +3241,98 @@ int ssl_check_clienthello_tlsext_late(SSL *s)
             al = SSL_AD_INTERNAL_ERROR;
             goto err;
         }
-    } else
+    } else {
         s->tlsext_status_expected = 0;
+    }
 
+    // handle alpn
     if (!tls1_alpn_handle_client_hello_late(s, &ret, &al)) {
         goto err;
+    }
+
+    // handle TPE
+    if (s->tpe_included) {
+		/*
+		 * This is the reason why we can only really handle TPE
+		 * now... dependency on the chosen cipher suite.
+		 */
+		if (!tls12_is_cipher_compatible_with_TPE(s)) {
+			// unsupported conditions
+			ret = SSL_TLSEXT_ERR_ALERT_FATAL;
+			al = SSL_AD_ILLEGAL_PARAMETER;
+			goto err;
+		}
+
+		/*
+		 * Next, decision whether we agree to TPE will greatly depend on client
+		 * authentication. Again, notice the dependency on the chosen cipher
+		 * suite.
+		 */
+		ssl3_decide_on_client_auth(s);
+
+		// now onto the conditions...
+		if(s->hit) {
+			/*
+			 * When resuming a session, the original decision prevails
+			 * as the extension's definition imposes the session's
+			 * inspection status on every new connection bound to
+			 * that session.
+			 */
+			if(!s->session->is_inspected) {
+				/*
+				 * The client is trying to resume a non-inspected
+				 * session and make the new connection inspected...
+				 */
+				ret = SSL_TLSEXT_ERR_ALERT_FATAL;
+				al = SSL_AD_ILLEGAL_PARAMETER;
+				goto err;
+			}
+		} else {
+			/*
+			 * When creating a new session, the server must allow
+			 * inspection globally and check if it's only enabled
+			 * for regular sessions without client authentication.
+			 */
+			int tpe_allowed;
+			if (s->s3->tmp.cert_request) {
+				tpe_allowed = SSL_CTX_get_tpe_support(s->ctx) &&
+					!SSL_CTX_get_tpe_client_anon_only(s->ctx);
+			} else {
+				tpe_allowed = SSL_CTX_get_tpe_support(s->ctx);
+			}
+
+			// if server doesn't allow inspection, deny it
+			if(!tpe_allowed) {
+				ret = SSL_TLSEXT_ERR_ALERT_FATAL;
+				al = SSL_AD_INSPECTION_DENIED;
+				goto err;
+			}
+		}
+
+		/*
+		 * Ok, TPE is totally allowed now...
+		 */
+
+		// pick up the value from client
+		int value = s->tpe_included - 1;
+
+		// and handle the value...
+		switch (value) {
+		case TLSEXT_TPE_CLIENT:
+			// nothing to be done, handshake continues as usual
+			break;
+		case TLSEXT_TPE_PROXY:
+			// inspection activated
+			s->session->is_inspected = 1;
+			break;
+		default: // including TLSEXT_TPE_SERVER
+			ret = SSL_TLSEXT_ERR_ALERT_FATAL;
+			al = SSL_AD_ILLEGAL_PARAMETER;
+			goto err;
+		}
+
+		// log having seen the extension in ClientHello (reset indicator)
+		s->tpe_included = 1;
     }
 
  err:

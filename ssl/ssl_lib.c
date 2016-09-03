@@ -374,7 +374,15 @@ SSL *SSL_new(SSL_CTX *ctx)
     s->tlsext_ocsp_resplen = -1;
     CRYPTO_add(&ctx->references, 1, CRYPTO_LOCK_SSL_CTX);
     s->initial_ctx = ctx;
+    s->verify_result = X509_V_OK;
+    // initialize the TPE related fields
     s->tpe_included = 0;
+    s->proxy_verify_result = X509_V_OK;
+    s->proxy_ocsp_resp = NULL;
+    s->proxy_ocsp_resplen = -1;
+    s->proxy_pubkey_tmp = NULL;
+    s->proxy_pubkey_tmp_len = 0;
+
 # ifndef OPENSSL_NO_EC
     if (ctx->tlsext_ecpointformatlist) {
         s->tlsext_ecpointformatlist =
@@ -409,9 +417,6 @@ SSL *SSL_new(SSL_CTX *ctx)
         s->alpn_client_proto_list_len = s->ctx->alpn_client_proto_list_len;
     }
 #endif
-
-    s->verify_result = X509_V_OK;
-    s->proxy_verify_result = X509_V_OK;
 
     s->method = ctx->method;
 
@@ -645,6 +650,11 @@ void SSL_free(SSL *s)
         OPENSSL_free(s->tlsext_ocsp_resp);
     if (s->alpn_client_proto_list)
         OPENSSL_free(s->alpn_client_proto_list);
+    // free the TPE-related fields
+    if (s->proxy_ocsp_resp)
+    	OPENSSL_free(s->proxy_ocsp_resp);
+    if (s->proxy_pubkey_tmp)
+    	OPENSSL_free(s->proxy_pubkey_tmp);
 #endif
 
     if (s->client_CA != NULL)
@@ -895,7 +905,9 @@ X509* SSL_get_peer_x509(const SSL *s)
     else {
     	X509 *r = s->session->is_inspected ? s->session->proxy :
         		s->session->peer;
-    	CRYPTO_add(&r->references, 1, CRYPTO_LOCK_X509);
+    	if(r != NULL) {
+    		CRYPTO_add(&r->references, 1, CRYPTO_LOCK_X509);
+    	}
     	return (r);
     }
 }
@@ -1906,6 +1918,16 @@ void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data,
         *len = ssl->s3->alpn_selected_len;
 }
 
+int SSL_was_tpe_included(const SSL *ssl)
+{
+	return ssl->tpe_included;
+}
+
+int SSL_is_session_inspected(const SSL *ssl)
+{
+	return ssl->session->is_inspected;
+}
+
 #endif                          /* !OPENSSL_NO_TLSEXT */
 
 int SSL_export_keying_material(SSL *s, unsigned char *out, size_t olen,
@@ -2092,8 +2114,10 @@ SSL_CTX *SSL_CTX_new(const SSL_METHOD *meth)
 
     ret->tlsext_status_cb = 0;
     ret->tlsext_status_arg = NULL;
+
     /* Initialize global TPE support. Always enabled by default. */
     ret->tpe_supported = 1;
+    ret->tpe_client_anon_only = 1;
 
 # ifndef OPENSSL_NO_NEXTPROTONEG
     ret->next_protos_advertised_cb = 0;
@@ -3040,6 +3064,17 @@ SSL *SSL_dup(SSL *s)
 
     X509_VERIFY_PARAM_inherit(ret->param, s->param);
 
+    // duplicate the TPE related fields
+#ifndef OPENSSL_NO_TLSEXT
+    // simply initialize & copy the code from 'SSL_new()'
+    ret->tpe_included = 0;
+    ret->proxy_verify_result = X509_V_OK;
+    ret->proxy_ocsp_resp = NULL;
+    ret->proxy_ocsp_resplen = -1;
+    ret->proxy_pubkey_tmp = NULL;
+    ret->proxy_pubkey_tmp_len = 0;
+#endif
+
     /* dup the cipher_list and cipher_list_by_id stacks */
     if (s->cipher_list != NULL) {
         if ((ret->cipher_list = sk_SSL_CIPHER_dup(s->cipher_list)) == NULL)
@@ -3131,8 +3166,10 @@ EVP_PKEY *SSL_CTX_get0_privatekey(const SSL_CTX *ctx)
 
 const SSL_CIPHER *SSL_get_current_cipher(const SSL *s)
 {
-    if ((s->session != NULL) && (s->session->cipher != NULL))
-        return (s->session->cipher);
+    if (s->session != NULL) {
+    	return s->session->cipher != NULL ? s->session->cipher :
+    			s->s3->tmp.new_cipher;
+    }
     return NULL;
 }
 

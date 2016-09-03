@@ -675,6 +675,12 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context);
 int MAIN(int, char **);
 int MAIN(int argc, char *argv[])
 {
+#ifndef OPENSSL_NO_TLSEXT
+	BIO_printf(sp_bio_err, "Error: 's_proxy' tool works on the basis of TLS extensions but this\n");
+	BIO_printf(sp_bio_err, "distribution of OpenSSL has been configured (compiled) NOT to include them.\n");
+	goto end;
+#endif
+
 	// declare variables for arguments
 	char *pass = NULL, *passarg = NULL;
 	int state = 0;
@@ -705,18 +711,6 @@ int MAIN(int argc, char *argv[])
 	}
 	SSL_CONF_CTX_set_flags(cctx_client, SSL_CONF_FLAG_CLIENT);
 	SSL_CONF_CTX_set_flags(cctx_client, SSL_CONF_FLAG_CMDLINE);
-
-    /*
-     * Setup global SSL context. This is also where we set
-     * special handling of both connections - through the
-     * argument function).
-     */
-    ctx = SSL_CTX_new(TLSv1_2_method());
-	if (ctx == NULL) {
-		ERR_print_errors(sp_bio_err);
-		goto end;
-	}
-	SSL_CTX_set_quiet_shutdown(ctx, 1);
 
     // disregard the command name name
     argc--;
@@ -850,6 +844,20 @@ int MAIN(int argc, char *argv[])
 		}
 	}
 
+	/*
+	 * Setup global SSL context. This is also where we set
+	 * special handling of both connections - through the
+	 * argument function).
+	 * We can only do this now because this call depends on
+	 * having parsed a well-formed certificate.
+	 */
+	ctx = SSL_CTX_new(TLSv1_2_method());
+	if (ctx == NULL) {
+		ERR_print_errors(sp_bio_err);
+		goto end;
+	}
+	SSL_CTX_set_quiet_shutdown(ctx, 1);
+
 	// something I don't really understand but it seems required...
     if (state) {
         SSL_CTX_set_info_callback(ctx, apps_ssl_info_callback);
@@ -859,12 +867,12 @@ int MAIN(int argc, char *argv[])
     if (!args_ssl_call(ctx, sp_bio_err, cctx_server, ssl_args, 0, 1)) {
         goto end;
     }
-    if (!args_ssl_call(ctx, sp_bio_err, cctx_client, ssl_args, 0, 1)) {
+    if (!args_ssl_call(ctx, sp_bio_err, cctx_client, ssl_args, 1, 1)) {
 		ERR_print_errors(sp_bio_err);
 		goto end;
 	}
-    // TODO: build_chain 0 or 1? For now, 1...
-    if (!set_cert_key_stuff(ctx, sp_cert, sp_key, sp_chain, 1)) {
+    // TODO: build_chain 0 or 1? For now, 0...
+    if (!set_cert_key_stuff(ctx, sp_cert, sp_key, sp_chain, 0)) {
         goto end;
     }
 
