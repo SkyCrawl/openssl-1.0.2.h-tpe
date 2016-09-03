@@ -1537,13 +1537,9 @@ int MAIN(int argc, char *argv[])
             alpn_in = *(++argv);
         }
         else if (strcmp(*argv, "-tpe") == 0) {
-            if (--argc < 1)
-                goto bad;
             allow_tpe = 1;
         }
         else if (strcmp(*argv, "-tpe_not_client_auth") == 0) {
-			if (--argc < 1)
-				goto bad;
 			allow_tpe = 1;
 			allow_tpe_client_anon_only = 1;
 		}
@@ -2741,6 +2737,12 @@ static int init_ssl_connection(SSL *con)
             }
             OPENSSL_free(exportedkeymat);
         }
+    }
+    if (SSL_was_tpe_included(con)) {
+    	BIO_printf(bio_s_out, "TPE received\n");
+    }
+    if (SSL_is_session_inspected(con)) {
+    	BIO_printf(bio_s_out, "TPE inspection activated\n");
     }
 
     return (1);

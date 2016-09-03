@@ -2265,9 +2265,19 @@ static void print_stuff(BIO *bio, SSL *s, int full)
             BIO_printf(bio, "ALPN protocol: ");
             BIO_write(bio, proto, proto_len);
             BIO_write(bio, "\n", 1);
-        } else
+        } else {
             BIO_printf(bio, "No ALPN negotiated\n");
+        }
     }
+#endif
+
+#ifndef OPENSSL_NO_TLSEXT
+if (SSL_was_tpe_included(s)) {
+	BIO_printf(bio, "TPE included\n");
+}
+if (SSL_is_session_inspected(s)) {
+	BIO_printf(bio, "TPE inspection activated\n");
+}
 #endif
 
 #ifndef OPENSSL_NO_SRTP
