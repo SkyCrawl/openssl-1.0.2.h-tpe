@@ -1,0 +1,94 @@
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number: 1 (0x1)
+    Signature Algorithm: sha256WithRSAEncryption
+        Issuer: C=CZ, ST=Czech republic, L=Prague, O=eTRENDS s.r.o., CN=Authority for Trustworthy Proxies/emailAddress=smolikj@e-trends.cz
+        Validity
+            Not Before: Jul 24 18:14:03 2016 GMT
+            Not After : Jun 30 18:14:03 2116 GMT
+        Subject: C=CZ, ST=Czech republic, O=eTRENDS s.r.o., CN=www.trustworthy-proxy.net
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+                Public-Key: (2048 bit)
+                Modulus:
+                    00:ab:09:e8:82:25:85:c9:3d:e9:2e:47:7e:08:8d:
+                    e2:2a:dc:5a:00:8e:ff:7e:36:ba:9b:25:4d:53:65:
+                    aa:a6:6e:62:06:0e:02:25:f3:40:ab:43:81:34:cc:
+                    b3:21:e5:13:af:49:43:ff:a9:aa:02:74:34:d0:e7:
+                    7b:ce:aa:8a:e4:97:ec:cd:cd:8d:10:5f:fa:f7:2c:
+                    44:60:93:55:0b:89:22:17:9e:c4:29:ad:81:01:a5:
+                    c5:a3:34:63:ec:15:7d:12:f1:60:47:54:82:ff:6b:
+                    fb:07:5f:89:26:ea:14:90:40:e2:20:4d:97:42:4d:
+                    03:a6:4b:cd:93:33:99:99:92:a4:9c:f3:fa:ce:a2:
+                    3c:16:69:bf:bd:2b:69:51:1b:d6:40:f0:f5:33:19:
+                    72:25:a2:40:b4:1f:6a:c6:e8:c2:a0:1d:fb:b4:5b:
+                    d7:a6:fb:b8:56:99:8e:12:da:66:41:8c:22:c0:d7:
+                    88:de:f9:aa:b7:83:b0:6f:7d:c5:cb:ed:10:90:fc:
+                    63:bb:fb:c1:f1:c9:ac:a5:9a:9e:d1:ab:75:43:87:
+                    b3:a2:a2:b4:6b:50:6d:42:1f:f6:60:af:da:03:76:
+                    b1:c5:7a:ae:f3:b9:6e:f6:41:fa:59:aa:a8:28:48:
+                    31:2d:ea:7a:90:0f:a1:9c:83:d5:19:e9:c3:d1:9d:
+                    f1:85
+                Exponent: 65537 (0x10001)
+        X509v3 extensions:
+            X509v3 Basic Constraints: 
+                CA:FALSE
+            X509v3 Key Usage: 
+                Digital Signature, Non Repudiation, Key Encipherment, Key Agreement
+            X509v3 Extended Key Usage: critical
+                TLS Web Server Authentication, proxyAuth
+            X509v3 Subject Key Identifier: 
+                A1:AB:CA:2B:12:34:F7:1E:6D:E5:5E:86:00:75:7D:5E:55:4C:DF:7D
+            X509v3 Authority Key Identifier: 
+                keyid:03:EB:21:9B:A7:BA:FF:3D:3C:85:0B:66:AA:1F:91:53:CE:A4:DF:3D
+
+            X509v3 Subject Alternative Name: 
+                email:smolikj@e-trends.cz
+            X509v3 Issuer Alternative Name: 
+                <EMPTY>
+
+            Netscape Comment: 
+                OpenSSL Generated Certificate
+    Signature Algorithm: sha256WithRSAEncryption
+         81:4e:5d:73:b7:e5:5e:00:c0:06:73:ba:67:7d:73:1f:96:f2:
+         18:27:55:f2:f8:af:d8:e0:ad:7c:9b:5c:43:cb:19:03:24:cf:
+         37:6c:08:23:64:6d:1a:ca:bd:15:18:2b:23:77:bd:f4:81:c1:
+         9c:75:ca:55:21:0c:aa:b2:fe:e9:da:12:47:e9:43:f4:c2:a3:
+         88:4d:54:4d:58:1f:62:48:22:db:be:58:cf:e9:99:36:2c:90:
+         cf:e1:30:d4:37:27:0e:0d:99:e1:d3:da:01:c2:cb:9d:59:39:
+         e4:ea:ef:75:e1:b2:bb:04:bb:11:4d:f7:ea:a6:d4:97:7d:c0:
+         31:ad:a2:ff:8c:2a:c4:a7:54:1e:2a:86:e8:1e:db:e1:27:82:
+         62:73:ee:85:1a:78:fa:09:85:ca:0b:d4:98:70:ef:8a:d8:c0:
+         16:f4:f7:7c:89:67:0c:33:f8:50:62:e8:9c:fe:fb:95:c6:61:
+         a0:73:ac:2a:10:5c:24:74:11:61:60:52:15:68:9d:95:df:f3:
+         72:a8:51:a8:8c:74:b6:b4:1a:bc:c9:e4:83:5e:c4:01:4b:30:
+         ff:e4:69:b7:d0:39:3e:0f:75:d3:c3:a6:21:a4:9d:4a:00:08:
+         12:72:44:65:b4:f2:c6:1e:81:88:f0:1c:15:60:77:8b:ca:4d:
+         95:6d:13:67
+-----BEGIN CERTIFICATE-----
+MIIEVDCCAzygAwIBAgIBATANBgkqhkiG9w0BAQsFADCBoDELMAkGA1UEBhMCQ1ox
+FzAVBgNVBAgMDkN6ZWNoIHJlcHVibGljMQ8wDQYDVQQHDAZQcmFndWUxFzAVBgNV
+BAoMDmVUUkVORFMgcy5yLm8uMSowKAYDVQQDDCFBdXRob3JpdHkgZm9yIFRydXN0
+d29ydGh5IFByb3hpZXMxIjAgBgkqhkiG9w0BCQEWE3Ntb2xpa2pAZS10cmVuZHMu
+Y3owIBcNMTYwNzI0MTgxNDAzWhgPMjExNjA2MzAxODE0MDNaMGMxCzAJBgNVBAYT
+AkNaMRcwFQYDVQQIDA5DemVjaCByZXB1YmxpYzEXMBUGA1UECgwOZVRSRU5EUyBz
+LnIuby4xIjAgBgNVBAMMGXd3dy50cnVzdHdvcnRoeS1wcm94eS5uZXQwggEiMA0G
+CSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCrCeiCJYXJPekuR34IjeIq3FoAjv9+
+NrqbJU1TZaqmbmIGDgIl80CrQ4E0zLMh5ROvSUP/qaoCdDTQ53vOqorkl+zNzY0Q
+X/r3LERgk1ULiSIXnsQprYEBpcWjNGPsFX0S8WBHVIL/a/sHX4km6hSQQOIgTZdC
+TQOmS82TM5mZkqSc8/rOojwWab+9K2lRG9ZA8PUzGXIlokC0H2rG6MKgHfu0W9em
++7hWmY4S2mZBjCLA14je+aq3g7BvfcXL7RCQ/GO7+8Hxyaylmp7Rq3VDh7OiorRr
+UG1CH/Zgr9oDdrHFeq7zuW72QfpZqqgoSDEt6nqQD6Gcg9UZ6cPRnfGFAgMBAAGj
+gdIwgc8wCQYDVR0TBAIwADALBgNVHQ8EBAMCA+gwHAYDVR0lAQH/BBIwEAYIKwYB
+BQUHAwEGBCoDBAUwHQYDVR0OBBYEFKGryisSNPcebeVehgB1fV5VTN99MB8GA1Ud
+IwQYMBaAFAPrIZunuv89PIULZqofkVPOpN89MB4GA1UdEQQXMBWBE3Ntb2xpa2pA
+ZS10cmVuZHMuY3owCQYDVR0SBAIwADAsBglghkgBhvhCAQ0EHxYdT3BlblNTTCBH
+ZW5lcmF0ZWQgQ2VydGlmaWNhdGUwDQYJKoZIhvcNAQELBQADggEBAIFOXXO35V4A
+wAZzumd9cx+W8hgnVfL4r9jgrXybXEPLGQMkzzdsCCNkbRrKvRUYKyN3vfSBwZx1
+ylUhDKqy/unaEkfpQ/TCo4hNVE1YH2JIItu+WM/pmTYskM/hMNQ3Jw4NmeHT2gHC
+y51ZOeTq73XhsrsEuxFN9+qm1Jd9wDGtov+MKsSnVB4qhuge2+EngmJz7oUaePoJ
+hcoL1Jhw74rYwBb093yJZwwz+FBi6Jz++5XGYaBzrCoQXCR0EWFgUhVonZXf83Ko
+UaiMdLa0GrzJ5INexAFLMP/kabfQOT4PddPDpiGknUoACBJyRGW08sYegYjwHBVg
+d4vKTZVtE2c=
+-----END CERTIFICATE-----
