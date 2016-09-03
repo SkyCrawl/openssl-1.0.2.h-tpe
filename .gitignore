@@ -119,7 +119,8 @@ ms/ssleay32.def
 ms/version32.rc
 
 # I still encountered some not-ignored and auto-generated files
-# implementing the TPE extension...
+# while implementing the TPE extension...
 /dist
 /krb5.h
 /apps/Makefile.tmp
+.DS_Store
