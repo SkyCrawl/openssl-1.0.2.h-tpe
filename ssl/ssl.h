@@ -534,15 +534,19 @@ struct ssl_session_st {
      * to disable session caching and tickets.
      */
     int not_resumable;
-    /* The server certificate used to establish this session */
-    struct sess_cert_st /* SESS_CERT */ *sess_cert;
     /*
-     * This is the cert for the other end. On clients, it will be the same as
-     * sess_cert->peer_key->x509 (the latter is not enough as sess_cert is
+     * This always holds information about the other end's certificate:
+     * - server certificate for clients and proxies (server-side session)
+     * - client certificate for servers and proxies (client-side session)
+     */
+    struct sess_cert_st /* SESS_CERT */ *end_cert;
+    /*
+     * The X509 This is the cert for the other end. Usually, it will be the same as
+     * end_cert->peer_key->x509 (the latter is not enough as end_cert is
      * not retained in the external representation of sessions, see
      * ssl_asn1.c).
      */
-    X509 *peer;
+    X509 *server_key;
     /*
      * when app_verify_callback accepts a session where a certificate is not
 +    * ok, we must remember the error for session reuse:
@@ -580,20 +584,28 @@ struct ssl_session_st {
      * by the handshake.
      */
     int is_inspected;
-    /* The proxy certificate used to establish this session, if any */
-    struct sess_cert_st /* SESS_CERT */ *proxy_cert;
     /*
-     * This is the cert for the proxy. On clients, it will be the same as
-     * proxy_cert->peer_key->x509 (the latter is not enough as proxy_cert is
+	 * This always holds information about another required certificate:
+	 * - proxy certificate for clients
+	 * - server certificate for proxies (client-side session)
+	 */
+    struct sess_cert_st /* SESS_CERT */ *peer_cert;
+    /*
+     * This is the cert for the peer. Usually, it will be the same as
+     * peer_cert->peer_key->x509 (the latter is not enough as peer_cert is
      * not retained in the external representation of sessions, see
      * ssl_asn1.c).
      */
-    X509 *proxy;
+    X509 *peer_key;
     /*
-     * when app_verify_callback accepts a session where a certificate is not
+     * When app_verify_callback accepts a session where a certificate is not
      * ok, we must remember the error for session reuse:
      */
     long proxy_verify_result;	/* only for proxies */
+    /*
+     * A bi-directional mapping of sessions. Only to be used by a proxy.
+     */
+    unsigned char mapped_sid[SSL_MAX_SSL_SESSION_ID_LENGTH];
 #  endif
 #  ifndef OPENSSL_NO_SRP
     char *srp_username;
@@ -874,12 +886,8 @@ void SSL_set_msg_callback(SSL *ssl,
 /* New commands for global TPE support */
 #  define SSL_CTX_get_tpe_support(ctx) \
 		SSL_CTX_ctrl((ctx), SSL_CTRL_GET_TPE_SUPPORT, 0, NULL)
-#  define SSL_CTX_set_tpe_support(ctx, enabled) \
-		SSL_CTX_ctrl((ctx), SSL_CTRL_SET_TPE_SUPPORT, (enabled), NULL)
-#  define SSL_CTX_get_tpe_client_anon_only(ctx) \
-		SSL_CTX_ctrl((ctx), SSL_CTRL_GET_TPE_CLIENT_ANON_ONLY, 0, NULL)
-#  define SSL_CTX_set_tpe_client_anon_only(ctx, enabled) \
-		SSL_CTX_ctrl((ctx), SSL_CTRL_SET_TPE_CLIENT_ANON_ONLY, (enabled), NULL)
+#  define SSL_CTX_set_tpe_support(ctx, tpe_support) \
+		SSL_CTX_ctrl((ctx), SSL_CTRL_SET_TPE_SUPPORT, (tpe_support), NULL)
 
 # endif
 
@@ -1590,7 +1598,7 @@ struct ssl_st {
 #  endif
     /* session info */
     /* client cert? */
-    /* This is used to hold the server certificate used */
+    /* This is used to hold own certificate (client, server or proxy) */
     struct cert_st /* CERT */ *cert;
     /*
      * the session_id_context is used to ensure sessions are only reused in
@@ -1677,8 +1685,11 @@ struct ssl_st {
     int tlsext_ocsp_resplen;
     /* RFC4507 session ticket expected to be received or sent */
     int tlsext_ticket_expected;
-    /* Indicates whether the ClientHello message contained TPE */
-    int tpe_included;
+    /*
+     * For clients, this denotes the TPE value sent (if any).
+     * For servers, this denotes the TPE value received (if any).
+     */
+    int tpe_value;
     /* verify result for proxy certificate chain */
     long proxy_verify_result;
     /* OCSP response received from proxy */
@@ -2315,6 +2326,10 @@ X509 *SSL_SESSION_get0_peer(SSL_SESSION *s);
 int SSL_SESSION_set1_id_context(SSL_SESSION *s, const unsigned char *sid_ctx,
                                 unsigned int sid_ctx_len);
 
+#ifndef OPENSSL_NO_TLSEXT
+int SSL_SESSION_is_mapped(SSL_SESSION *s);
+#endif
+
 SSL_SESSION *SSL_SESSION_new(void);
 const unsigned char *SSL_SESSION_get_id(const SSL_SESSION *s,
                                         unsigned int *len);
@@ -2652,6 +2667,7 @@ int SSL_set_session_secret_cb(SSL *s,
 
 void SSL_set_debug(SSL *s, int debug);
 int SSL_cache_hit(SSL *s);
+void SSL_set_role(SSL *s, int role, int force);
 int SSL_is_server(SSL *s);
 int SSL_is_client(SSL *s);
 int SSL_is_proxy(SSL *s);
@@ -3028,6 +3044,7 @@ void ERR_load_SSL_strings(void);
 # define SSL_R_ILLEGAL_SUITEB_DIGEST                      380
 # define SSL_R_INAPPROPRIATE_FALLBACK                     373
 # define SSL_R_INCONSISTENT_COMPRESSION                   340
+# define SSL_R_INSPECTION								  1115
 # define SSL_R_INVALID_CHALLENGE_LENGTH                   158
 # define SSL_R_INVALID_COMMAND                            280
 # define SSL_R_INVALID_COMPRESSION_ALGORITHM              341

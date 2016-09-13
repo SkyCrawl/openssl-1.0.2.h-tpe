@@ -828,7 +828,7 @@ static int serverinfo_srv_add_cb(SSL *s, unsigned int ext_type,
     size_t serverinfo_length = 0;
 
     /* Is there serverinfo data for the chosen server cert? */
-    if ((ssl_get_server_cert_serverinfo(s, &serverinfo,
+    if ((ssl_get_serverinfo_for_own_cert(s, &serverinfo,
                                         &serverinfo_length)) != 0) {
         /* Find the relevant extension from the serverinfo */
         int retval = serverinfo_find_extension(serverinfo, serverinfo_length,

@@ -201,9 +201,7 @@
 #define PROXY_PORT 4434
 #define SERVER_PORT PORT
 #define SSL_HOST_NAME "localhost"
-
-// TODO:
-#define TEST_CERT "../ssl/certs/..."
+#define TEST_CERT "server.pem"
 
 /*
  * -----------------------------------------------------------------
@@ -522,20 +520,38 @@ static int prx_cert_status_cb(SSL *s, void *arg)
     return SSL_TLSEXT_ERR_OK;
 }
 
+// forward declare a later function
+int prx_connect();
+
 /*
  * A function taken from 's_server'.
  */
-static int prx_accept_client_conn()
+int prx_do_accept_client_conn()
 {
-	// declare vars
-    int i;
-    const char *str;
-    X509 *peer;
-    long verify_error;
-    MS_STATIC char buf[BUFSIZ];
+    /*
+     * Before we accept the client connection, we need to register
+     * the correct role so that further code will know what to do.
+     */
+	SSL_set_role(conn_to_client, SSL_ROLE_PROXY, 1);
 
-    // accept connection
-    i = SSL_accept(conn_to_client);
+    // do accept the connection and retry if necessary
+    int i = SSL_accept(conn_to_client);
+    if (i != 2) {
+    	// should never happen...
+    	return -1; // calling code will handle the error
+    }
+
+    // TODO: handle the result
+    return prx_connect();
+}
+
+static int prx_print_accept_info(int accept_result)
+{
+	const char *str;
+	X509 *peer;
+	long verify_error;
+	MS_STATIC char buf[BUFSIZ];
+
 #ifdef CERT_CB_TEST_RETRY
     {
         while (i <= 0 && SSL_get_error(con, i) == SSL_ERROR_WANT_X509_LOOKUP
@@ -548,22 +564,22 @@ static int prx_accept_client_conn()
 #endif
 
     // check the result & verify the newly created connection
-    if (i <= 0) {
-        if (BIO_sock_should_retry(i)) {
-            BIO_printf(sp_bio_out, "DELAY\n");
-            return (1);
-        }
+	if (accept_result <= 0) {
+		if (BIO_sock_should_retry(accept_result)) {
+			BIO_printf(sp_bio_out, "DELAY\n");
+			return (1);
+		}
 
-        BIO_printf(sp_bio_err, "ERROR\n");
-        verify_error = SSL_get_verify_result(conn_to_client);
-        if (verify_error != X509_V_OK) {
-            BIO_printf(sp_bio_err, "verify error:%s\n",
-                       X509_verify_cert_error_string(verify_error));
-        }
-        /* Always print any error messages */
-        ERR_print_errors(sp_bio_err);
-        return (0);
-    }
+		BIO_printf(sp_bio_err, "ERROR\n");
+		verify_error = SSL_get_verify_result(conn_to_client);
+		if (verify_error != X509_V_OK) {
+			BIO_printf(sp_bio_err, "verify error:%s\n",
+					   X509_verify_cert_error_string(verify_error));
+		}
+		/* Always print any error messages */
+		ERR_print_errors(sp_bio_err);
+		return (0);
+	}
 
     /*
      * Print out some session information.
@@ -675,7 +691,7 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context);
 int MAIN(int, char **);
 int MAIN(int argc, char *argv[])
 {
-#ifndef OPENSSL_NO_TLSEXT
+#ifdef OPENSSL_NO_TLSEXT
 	BIO_printf(sp_bio_err, "Error: 's_proxy' tool works on the basis of TLS extensions but this\n");
 	BIO_printf(sp_bio_err, "distribution of OpenSSL has been configured (compiled) NOT to include them.\n");
 	goto end;
@@ -871,7 +887,8 @@ int MAIN(int argc, char *argv[])
 		ERR_print_errors(sp_bio_err);
 		goto end;
 	}
-    // TODO: build_chain 0 or 1? For now, 0...
+
+    // if we set the last argument to 1, proxy won't work...
     if (!set_cert_key_stuff(ctx, sp_cert, sp_key, sp_chain, 0)) {
         goto end;
     }
@@ -924,9 +941,6 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context)
     if (conn_to_client == NULL) {
     	// create the new connection
     	conn_to_client = SSL_new(ctx);
-
-    	// register self into it
-    	// TODO:
 
 #ifndef OPENSSL_NO_TLSEXT
         if (s_tlsextstatus) {
@@ -1111,6 +1125,8 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context)
                     }
                 }
 #endif
+
+                // TODO: does this really call 'ssl_connect' for the server role?
                 k = SSL_write(conn_to_client, &(buf[l]), (unsigned int)i);
 
                 switch (SSL_get_error(conn_to_client, k)) {
@@ -1143,9 +1159,8 @@ static int prx_host(char *hostname, int s, int stype, unsigned char* context)
         }
         if (read_from_sslcon) {
             if (!SSL_is_init_finished(conn_to_client)) {
-            	// TODO: proceed with proxy setup...
-            	i = prx_accept_client_conn();
-
+            	// PROXY: this is where we go into 'ssl_accept'
+            	i = prx_do_accept_client_conn();
                 if (i < 0) {
                     ret = 0;
                     goto err;
@@ -1245,7 +1260,7 @@ int prx_connect()
 
  re_start:
 
- 	 // initialize it
+ 	// initialize it
     if (init_client(&s, server_host, server_port, SOCK_STREAM) == 0) {
         BIO_printf(sp_bio_err, "connect:errno=%d\n", get_last_socket_error());
         SHUTDOWN(s);
@@ -1272,8 +1287,6 @@ int prx_connect()
         SSL_set_msg_callback_arg(conn_to_server, sp_bio_msg ? sp_bio_msg : sp_bio_out);
     }
     SSL_set_bio(conn_to_server, sbio, sbio);
-
-    // this is where the set the proxy's special handshake handling...
     SSL_set_connect_state(conn_to_server);
 
     // ok, lets connect...
@@ -1426,6 +1439,13 @@ int prx_connect()
         }
 
         if (!ssl_pending && FD_ISSET(SSL_get_fd(conn_to_server), &writefds)) {
+        	/*
+			 * Before we connect to the server, we need to register the correct
+			 * role so that further code will know what to do.
+			 */
+			SSL_set_role(conn_to_server, SSL_ROLE_PROXY, 1);
+
+        	// PROXY: this is where we transitively call 'ssl_connect'...
             k = SSL_write(conn_to_server, &(cbuf[cbuf_off]), (unsigned int)cbuf_len);
             switch (SSL_get_error(conn_to_server, k)) {
             case SSL_ERROR_NONE:
@@ -1645,58 +1665,6 @@ int prx_connect()
 
     ret = 0;
 
-    // s->handshake_func = ssl3_accept; // now, it is my accept
-    // s->handshake_func = ssl3_connect; // now, it is my connect
-
-    // s->method->... are functions from our own METHOD
-
-    /*
-    int ssl3_renegotiate(SSL *s)
-	{
-		if (s->handshake_func == NULL)
-			return (1);
-
-		if (s->s3->flags & SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS)
-			return (0);
-
-		s->s3->renegotiate = 1;
-		return (1);
-	}
-
-	int SSL_accept(SSL *s) // VOLÁNO!
-	{
-		if (s->handshake_func == 0)
-			SSL_set_accept_state(s);
-
-		return (s->method->ssl_accept(s));
-	}
-
-	int SSL_connect(SSL *s) // TODO: NEVOLÁNO!
-	{
-		if (s->handshake_func == 0)
-			SSL_set_connect_state(s);
-
-		return (s->method->ssl_connect(s));
-	}
-
-	int SSL_do_handshake(SSL *s) // VOLÁNO!
-	{
-		int ret = 1;
-
-		if (s->handshake_func == NULL) {
-			SSLerr(SSL_F_SSL_DO_HANDSHAKE, SSL_R_CONNECTION_TYPE_NOT_SET);
-			return (-1);
-		}
-
-		s->method->ssl_renegotiate_check(s);
-
-		if (SSL_in_init(s) || SSL_in_before(s)) {
-			ret = s->handshake_func(s);
-		}
-		return (ret);
-	}
-    */
-
  shut:
     if (in_init) {
     	prx_print_stuff(sp_bio_out, conn_to_server, full_log);
@@ -1724,33 +1692,4 @@ int prx_connect()
     apps_shutdown();
     OPENSSL_EXIT(ret);
     return ret;
-}
-
-int todo(void)
-{
-	// TODO:
-
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_CTX_set_ssl_ctx.html
-	// SSL_CONF_CTX_set_ssl_ctx();
-
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_CTX_set_ssl.html
-	// SSL_CONF_CTX_set_ssl();
-
-	// must read and implement!
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_CTX_set_flags.html
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_cmd.html
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_use_PrivateKey.html
-
-	// externalizovanej seznam extenzí a jejich dat pro ServerHello:
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CTX_use_serverinfo.html
-
-	/*
-	 * If necessary, SSL_write() will negotiate a TLS/SSL session, if not already explicitly performed by SSL_connect or SSL_accept.
-	 * If the peer requests a re-negotiation, it will be performed transparently during the SSL_write() operation. The behaviour of SSL_write() depends on the underlying BIO.
-	 * For the transparent negotiation to succeed, the ssl must have been initialized to client or server mode.
-	 * This is being done by calling SSL_set_connect_state or SSL_set_accept_state() before the first call to an SSL_read or SSL_write() function.
-	 */
-
-	puts("Hello World"); /* prints Hello World */
-	return EXIT_SUCCESS;
 }

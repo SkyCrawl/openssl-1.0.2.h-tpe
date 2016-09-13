@@ -707,7 +707,7 @@ int ssl_set_peer_cert_type(SESS_CERT *sc, int type)
     return (1);
 }
 
-int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int server_cert_chain)
+int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int cert_chain)
 {
     X509 *x;
     int i;
@@ -771,7 +771,7 @@ int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int server_cert_chain)
     }
 
     // if successfully verified and the chain belongs to a proxy, check inspection permissions
-    if((i > 0) && !server_cert_chain) {
+    if((i > 0) && !cert_chain) {
     	// Note: the trusted and verified path was built into ctx->chain
     	// Note: verification of KU extension values should be handled elsewhere
     	int cert_count = sk_X509_num(ctx.chain);
@@ -840,7 +840,7 @@ int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int server_cert_chain)
     }
 
     // finally, register the verification result, cleanup and return
-    if(server_cert_chain) {
+    if(cert_chain) {
     	s->verify_result = ctx.error;
     }
     else {

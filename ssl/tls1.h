@@ -314,10 +314,14 @@ extern "C" {
 # define TLSEXT_curve_P_256                              23
 # define TLSEXT_curve_P_384                              24
 
-/* Enum Values for TPE */
-# define TLSEXT_TPE_CLIENT								 0
-# define TLSEXT_TPE_SERVER								 1
-# define TLSEXT_TPE_PROXY								 2
+/* Enum Values for TPE support */
+# define TLSEXT_TPESUPPORT_ENABLED						 1
+# define TLSEXT_TPESUPPORT_NOT_CLIENT_AUTH				 2
+
+ /* Enum Values for TPE */
+ # define TLSEXT_TPE_CLIENT								 1
+ # define TLSEXT_TPE_SERVER								 2
+ # define TLSEXT_TPE_PROXY								 3
 
 # ifndef OPENSSL_NO_TLSEXT
 

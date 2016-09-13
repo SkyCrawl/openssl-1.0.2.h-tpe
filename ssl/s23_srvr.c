@@ -175,7 +175,7 @@ int ssl23_accept(SSL *s)
         case SSL_ST_BEFORE | SSL_ST_ACCEPT:
         case SSL_ST_OK | SSL_ST_ACCEPT:
 
-            s->role = SSL_ROLE_SERVER;
+			SSL_set_role(s, SSL_ROLE_SERVER, 1);
             if (cb != NULL)
                 cb(s, SSL_CB_HANDSHAKE_START, 1);
 

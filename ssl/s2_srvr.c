@@ -308,7 +308,7 @@ int ssl2_accept(SSL *s)
              * already have one, and we only want to do it once.
              */
             if (!(s->verify_mode & SSL_VERIFY_PEER) ||
-                ((s->session->peer != NULL) &&
+                ((s->session->server_key != NULL) &&
                  (s->verify_mode & SSL_VERIFY_CLIENT_ONCE))) {
                 s->state = SSL2_ST_SEND_SERVER_FINISHED_A;
                 break;
@@ -752,20 +752,20 @@ static int server_hello(SSL *s)
         *(p++) = (unsigned char)hit;
 # if 1
         if (!hit) {
-            if (s->session->sess_cert != NULL)
+            if (s->session->end_cert != NULL)
                 /*
                  * This can't really happen because get_client_hello has
-                 * called ssl_get_new_session, which does not set sess_cert.
+                 * called ssl_get_new_session, which does not set end_cert.
                  */
-                ssl_sess_cert_free(s->session->sess_cert);
-            s->session->sess_cert = ssl_sess_cert_new();
-            if (s->session->sess_cert == NULL) {
+                ssl_sess_cert_free(s->session->end_cert);
+            s->session->end_cert = ssl_sess_cert_new();
+            if (s->session->end_cert == NULL) {
                 SSLerr(SSL_F_SERVER_HELLO, ERR_R_MALLOC_FAILURE);
                 return (-1);
             }
         }
         /*
-         * If 'hit' is set, then s->sess_cert may be non-NULL or NULL,
+         * If 'hit' is set, then s->end_cert may be non-NULL or NULL,
          * depending on whether it survived in the internal cache or was
          * retrieved from an external cache. If it is NULL, we cannot put any
          * useful data in it anyway, so we don't touch it.
@@ -775,17 +775,17 @@ static int server_hello(SSL *s)
                                  * and sess_cert_st were * the same. */
         if (!hit) {             /* else add cert to session */
             CRYPTO_add(&s->cert->references, 1, CRYPTO_LOCK_SSL_CERT);
-            if (s->session->sess_cert != NULL)
-                ssl_cert_free(s->session->sess_cert);
-            s->session->sess_cert = s->cert;
+            if (s->session->end_cert != NULL)
+                ssl_cert_free(s->session->end_cert);
+            s->session->end_cert = s->cert;
         } else {                /* We have a session id-cache hit, if the *
                                  * session-id has no certificate listed
                                  * against * the 'cert' structure, grab the
                                  * 'old' one * listed against the SSL
                                  * connection */
-            if (s->session->sess_cert == NULL) {
+            if (s->session->end_cert == NULL) {
                 CRYPTO_add(&s->cert->references, 1, CRYPTO_LOCK_SSL_CERT);
-                s->session->sess_cert = s->cert;
+                s->session->end_cert = s->cert;
             }
         }
 # endif
@@ -1119,9 +1119,9 @@ static int request_certificate(SSL *s)
         EVP_MD_CTX_cleanup(&ctx);
 
         if (i > 0) {
-            if (s->session->peer != NULL)
-                X509_free(s->session->peer);
-            s->session->peer = x509;
+            if (s->session->server_key != NULL)
+                X509_free(s->session->server_key);
+            s->session->server_key = x509;
             CRYPTO_add(&x509->references, 1, CRYPTO_LOCK_X509);
             s->session->verify_result = s->verify_result;
             ret = 1;

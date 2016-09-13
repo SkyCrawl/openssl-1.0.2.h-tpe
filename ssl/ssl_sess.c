@@ -216,8 +216,8 @@ SSL_SESSION *SSL_SESSION_new(void)
     ss->tlsext_ellipticcurvelist = NULL;
 # endif
     ss->is_inspected = 0;
-    ss->proxy_cert = NULL;
-    ss->proxy = NULL;
+    ss->peer_cert = NULL;
+    ss->peer_key = NULL;
     ss->proxy_verify_result = 1; /* avoid 0 (= X509_V_OK) just in case */
 #endif
     CRYPTO_new_ex_data(CRYPTO_EX_INDEX_SSL_SESSION, ss, &ss->ex_data);
@@ -261,8 +261,8 @@ SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket)
     dest->tlsext_ellipticcurvelist = NULL;
 # endif
     dest->tlsext_tick = NULL;
-    dest->proxy_cert = NULL;
-    dest->proxy = NULL;
+    dest->peer_cert = NULL;
+    dest->peer_key = NULL;
 #endif
 #ifndef OPENSSL_NO_SRP
     dest->srp_username = NULL;
@@ -275,10 +275,10 @@ SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket)
 
     dest->references = 1;
 
-    if (src->sess_cert != NULL)
-        CRYPTO_add(&src->sess_cert->references, 1, CRYPTO_LOCK_SSL_SESS_CERT);
-    if (src->peer != NULL)
-        CRYPTO_add(&src->peer->references, 1, CRYPTO_LOCK_X509);
+    if (src->end_cert != NULL)
+        CRYPTO_add(&src->end_cert->references, 1, CRYPTO_LOCK_SSL_SESS_CERT);
+    if (src->server_key != NULL)
+        CRYPTO_add(&src->server_key->references, 1, CRYPTO_LOCK_X509);
 
 #ifndef OPENSSL_NO_PSK
     if (src->psk_identity_hint) {
@@ -340,10 +340,10 @@ SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket)
     }
 
     // we can just copy and adjust the code above for TPE items
-    if (src->proxy_cert != NULL)
-    	CRYPTO_add(&src->proxy_cert->references, 1, CRYPTO_LOCK_SSL_SESS_CERT);
-    if (src->proxy != NULL)
-    	CRYPTO_add(&src->proxy->references, 1, CRYPTO_LOCK_X509);
+    if (src->peer_cert != NULL)
+    	CRYPTO_add(&src->peer_cert->references, 1, CRYPTO_LOCK_SSL_SESS_CERT);
+    if (src->peer_key != NULL)
+    	CRYPTO_add(&src->peer_key->references, 1, CRYPTO_LOCK_X509);
 
 #endif
 
@@ -420,24 +420,43 @@ int ssl_get_new_session(SSL *s, int session)
     SSL_SESSION *ss = NULL;
     GEN_SESSION_CB cb = def_generate_session_id;
 
-    if ((ss = SSL_SESSION_new()) == NULL)
+    if ((ss = SSL_SESSION_new()) == NULL) {
         return (0);
+    }
 
     /* If the context has a default timeout, use it */
-    if (s->session_ctx->session_timeout == 0)
+    if (s->session_ctx->session_timeout == 0) {
         ss->timeout = SSL_get_default_timeout(s);
-    else
+    } else {
         ss->timeout = s->session_ctx->session_timeout;
+    }
 
     if (s->session != NULL) {
-    	// first move TPE information into the new session
-#ifndef OPENSSL_NO_TLSEXT
-    	ss->is_inspected = s->session->is_inspected;
-    	ss->proxy_cert = s->session->proxy_cert;
-    	s->session->proxy_cert = NULL; // prevent the pointer from being freed afterwards
-    	ss->proxy = s->session->proxy;
-    	s->session->proxy = NULL; // prevent the pointer from being freed afterwards
+    	// first copy some needed items
+    	ss->ciphers = sk_SSL_CIPHER_dup(s->session->ciphers);
+    	if (s->session->tlsext_hostname) {
+    		ss->tlsext_hostname = BUF_memdup(s->session->tlsext_hostname,
+    				strlen(s->session->tlsext_hostname));
+    	}
+
+#ifndef OPENSSL_NO_EC
+		if (s->session->tlsext_ecpointformatlist_length > 0) {
+			ss->tlsext_ecpointformatlist = BUF_memdup(
+					s->session->tlsext_ecpointformatlist,
+					s->session->tlsext_ecpointformatlist_length);
+			ss->tlsext_ecpointformatlist_length =
+						s->session->tlsext_ecpointformatlist_length;
+		}
+		if (s->session->tlsext_ellipticcurvelist_length > 0) {
+			ss->tlsext_ellipticcurvelist = BUF_memdup(
+					s->session->tlsext_ellipticcurvelist,
+					s->session->tlsext_ellipticcurvelist_length);
+			ss->tlsext_ellipticcurvelist_length =
+					s->session->tlsext_ellipticcurvelist_length;
+		}
 #endif
+
+    	// Note: no need to copy TPE information in here
         SSL_SESSION_free(s->session);
         s->session = NULL;
     }
@@ -495,10 +514,12 @@ int ssl_get_new_session(SSL *s, int session)
 #endif
         /* Choose which callback will set the session ID */
         CRYPTO_r_lock(CRYPTO_LOCK_SSL_CTX);
-        if (s->generate_session_id)
+        if (s->generate_session_id) {
             cb = s->generate_session_id;
-        else if (s->session_ctx->generate_session_id)
+        } else if (s->session_ctx->generate_session_id) {
             cb = s->session_ctx->generate_session_id;
+        }
+
         CRYPTO_r_unlock(CRYPTO_LOCK_SSL_CTX);
         /* Choose a session ID */
         tmp = ss->session_id_length;
@@ -520,11 +541,14 @@ int ssl_get_new_session(SSL *s, int session)
             SSL_SESSION_free(ss);
             return (0);
         }
+
         /* If the session length was shrunk and we're SSLv2, pad it */
-        if ((tmp < ss->session_id_length) && (s->version == SSL2_VERSION))
+        if ((tmp < ss->session_id_length) && (s->version == SSL2_VERSION)) {
             memset(ss->session_id + tmp, 0, ss->session_id_length - tmp);
-        else
+        } else {
             ss->session_id_length = tmp;
+        }
+
         /* Finally, check for a conflict */
         if (SSL_has_matching_session_id(s, ss->session_id,
                                         ss->session_id_length)) {
@@ -552,6 +576,7 @@ int ssl_get_new_session(SSL *s, int session)
         SSL_SESSION_free(ss);
         return 0;
     }
+
     memcpy(ss->sid_ctx, s->sid_ctx, s->sid_ctx_length);
     ss->sid_ctx_length = s->sid_ctx_length;
     s->session = ss;
@@ -584,7 +609,7 @@ int ssl_get_new_session(SSL *s, int session)
 int ssl_get_prev_session(SSL *s, unsigned char *session_id, int len,
                          const unsigned char *limit)
 {
-    /* This is used only by servers. */
+    /* This is used only by connections with the role of a server. */
 
     SSL_SESSION *ret = NULL;
     int fatal = 0;
@@ -884,13 +909,13 @@ void SSL_SESSION_free(SSL_SESSION *ss)
     OPENSSL_cleanse(ss->session_id, sizeof ss->session_id);
     /*
      * If independent key exchange is ever supported for the TPE extension,
-     * make sure we're not freeing the same thing (e.g. 'sess_cert' and
+     * make sure we're not freeing the same thing (e.g. 'end_cert' and
      * 'proxy_cert').
      */
-    if (ss->sess_cert != NULL)
-        ssl_sess_cert_free(ss->sess_cert);
-    if (ss->peer != NULL)
-        X509_free(ss->peer);
+    if (ss->end_cert != NULL)
+        ssl_sess_cert_free(ss->end_cert);
+    if (ss->server_key != NULL)
+        X509_free(ss->server_key);
     if (ss->ciphers != NULL)
         sk_SSL_CIPHER_free(ss->ciphers);
 #ifndef OPENSSL_NO_TLSEXT
@@ -899,10 +924,10 @@ void SSL_SESSION_free(SSL_SESSION *ss)
     if (ss->tlsext_tick != NULL)
         OPENSSL_free(ss->tlsext_tick);
     // freeing TPE items
-    if (ss->proxy_cert != NULL)
-    	ssl_sess_cert_free(ss->proxy_cert);
-    if (ss->proxy != NULL)
-    	X509_free(ss->proxy);
+    if (ss->peer_cert != NULL)
+    	ssl_sess_cert_free(ss->peer_cert);
+    if (ss->peer_key != NULL)
+    	X509_free(ss->peer_key);
 # ifndef OPENSSL_NO_EC
     ss->tlsext_ecpointformatlist_length = 0;
     if (ss->tlsext_ecpointformatlist != NULL)
@@ -1012,7 +1037,7 @@ long SSL_SESSION_set_time(SSL_SESSION *s, long t)
 X509 *SSL_SESSION_get0_peer(SSL_SESSION *s)
 {
 	// TODO: when peer and when proxy?
-    return s->peer;
+    return s->server_key;
 }
 
 int SSL_SESSION_set1_id_context(SSL_SESSION *s, const unsigned char *sid_ctx,
@@ -1028,6 +1053,14 @@ int SSL_SESSION_set1_id_context(SSL_SESSION *s, const unsigned char *sid_ctx,
 
     return 1;
 }
+
+#ifndef OPENSSL_NO_TLSEXT
+int SSL_SESSION_is_mapped(SSL_SESSION *s)
+{
+	unsigned long* l = &(s->mapped_sid[0]);
+    return (l[0] != 0) || (l[1] != 0) || (l[2] != 0) || (l[3] != 0);
+}
+#endif
 
 long SSL_CTX_set_timeout(SSL_CTX *s, long t)
 {

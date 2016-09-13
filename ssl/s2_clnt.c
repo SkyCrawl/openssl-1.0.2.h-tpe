@@ -502,19 +502,19 @@ static int get_server_hello(SSL *s)
         }
         s->session->cipher = sk_SSL_CIPHER_value(prio, i);
 
-        if (s->session->peer != NULL) { /* can't happen */
+        if (s->session->server_key != NULL) { /* can't happen */
             ssl2_return_error(s, SSL2_PE_UNDEFINED_ERROR);
             SSLerr(SSL_F_GET_SERVER_HELLO, ERR_R_INTERNAL_ERROR);
             return (-1);
         }
 
-        s->session->peer = s->session->sess_cert->peer_key->x509;
+        s->session->server_key = s->session->end_cert->peer_key->x509;
         /* peer_key->x509 has been set by ssl2_set_certificate. */
-        CRYPTO_add(&s->session->peer->references, 1, CRYPTO_LOCK_X509);
+        CRYPTO_add(&s->session->server_key->references, 1, CRYPTO_LOCK_X509);
     }
 
-    if (s->session->sess_cert == NULL
-        || s->session->peer != s->session->sess_cert->peer_key->x509)
+    if (s->session->end_cert == NULL
+        || s->session->server_key != s->session->end_cert->peer_key->x509)
         /* can't happen */
     {
         ssl2_return_error(s, SSL2_PE_UNDEFINED_ERROR);
@@ -664,7 +664,7 @@ static int client_master_key(SSL *s)
         memcpy(d, sess->master_key, (unsigned int)clear);
         d += clear;
 
-        enc = ssl_rsa_public_encrypt(sess->sess_cert, enc,
+        enc = ssl_rsa_public_encrypt(sess->end_cert, enc,
                                      &(sess->master_key[clear]), d,
                                      (s->
                                       s2->ssl2_rollback) ? RSA_SSLV23_PADDING
@@ -838,7 +838,7 @@ static int client_certificate(SSL *s)
         EVP_SignInit_ex(&ctx, s->ctx->rsa_md5, NULL);
         EVP_SignUpdate(&ctx, s->s2->key_material, s->s2->key_material_length);
         EVP_SignUpdate(&ctx, cert_ch, (unsigned int)cert_ch_len);
-        i = i2d_X509(s->session->sess_cert->peer_key->x509, &p);
+        i = i2d_X509(s->session->end_cert->peer_key->x509, &p);
         /*
          * Don't update the signature if it fails - FIXME: probably should
          * handle this better
@@ -1032,9 +1032,9 @@ int ssl2_set_certificate(SSL *s, int type, int len, const unsigned char *data)
         ret = -1;
         goto err;
     }
-    if (s->session->sess_cert)
-        ssl_sess_cert_free(s->session->sess_cert);
-    s->session->sess_cert = sc;
+    if (s->session->end_cert)
+        ssl_sess_cert_free(s->session->end_cert);
+    s->session->end_cert = sc;
 
     sc->peer_pkeys[SSL_PKEY_RSA_ENC].x509 = x509;
     sc->peer_key = &(sc->peer_pkeys[SSL_PKEY_RSA_ENC]);

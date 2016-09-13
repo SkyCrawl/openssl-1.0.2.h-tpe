@@ -229,7 +229,7 @@ int dtls1_accept(SSL *s)
         case SSL_ST_BEFORE | SSL_ST_ACCEPT:
         case SSL_ST_OK | SSL_ST_ACCEPT:
 
-            s->role = SSL_ROLE_SERVER;
+			SSL_set_role(s, SSL_ROLE_SERVER, 1);
             if (cb != NULL)
                 cb(s, SSL_CB_HANDSHAKE_START, 1);
 
@@ -540,7 +540,7 @@ int dtls1_accept(SSL *s)
                     * if SSL_VERIFY_CLIENT_ONCE is set, don't request cert
                     * during re-negotiation:
                     */
-                   ((s->session->peer != NULL) &&
+                   ((s->session->server_key != NULL) &&
                     (s->verify_mode & SSL_VERIFY_CLIENT_ONCE)) ||
                    /*
                     * never request cert in anonymous ciphersuites (see
@@ -680,7 +680,7 @@ int dtls1_accept(SSL *s)
             } else if (SSL_USE_SIGALGS(s)) {
                 s->state = SSL3_ST_SR_CERT_VRFY_A;
                 s->init_num = 0;
-                if (!s->session->peer)
+                if (!s->session->server_key)
                     break;
                 /*
                  * For sigalgs freeze the handshake buffer at this point and

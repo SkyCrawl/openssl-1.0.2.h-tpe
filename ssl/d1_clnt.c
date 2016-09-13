@@ -222,7 +222,7 @@ int dtls1_connect(SSL *s)
         case SSL_ST_BEFORE | SSL_ST_CONNECT:
         case SSL_ST_OK | SSL_ST_CONNECT:
 
-            s->role = SSL_ROLE_CLIENT;
+			SSL_set_role(s, SSL_ROLE_CLIENT, 1);
             if (cb != NULL)
                 cb(s, SSL_CB_HANDSHAKE_START, 1);
 
@@ -324,7 +324,7 @@ int dtls1_connect(SSL *s)
 
         case SSL3_ST_CW_CLNT_HELLO_B:
             dtls1_start_timer(s);
-            ret = ssl3_client_hello(s);
+            ret = ssl3_send_client_hello(s);
             if (ret <= 0)
                 goto end;
 
@@ -435,7 +435,7 @@ int dtls1_connect(SSL *s)
 
         case SSL3_ST_CR_KEY_EXCH_A:
         case SSL3_ST_CR_KEY_EXCH_B:
-            ret = ssl3_get_key_exchange(s, &(s->session->sess_cert));
+            ret = ssl3_get_key_exchange(s, &(s->session->end_cert));
             if (ret <= 0)
                 goto end;
             s->state = SSL3_ST_CR_CERT_REQ_A;
@@ -445,7 +445,7 @@ int dtls1_connect(SSL *s)
              * at this point we check that we have the required stuff from
              * the server
              */
-            if (!ssl3_check_cert_and_algorithm(s, s->session->sess_cert)) {
+            if (!ssl3_check_cert_and_algorithm(s, s->session->end_cert)) {
                 ret = -1;
                 s->state = SSL_ST_ERR;
                 goto end;

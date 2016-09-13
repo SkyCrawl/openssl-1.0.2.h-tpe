@@ -1062,16 +1062,22 @@ void ssl_sess_cert_free(SESS_CERT *sc);
 int ssl_set_peer_cert_type(SESS_CERT *c, int type);
 int ssl_get_new_session(SSL *s, int session);
 int ssl_get_prev_session(SSL *s, unsigned char *session, int len,
-                         const unsigned char *limit);
+		const unsigned char *limit);
+int SSL_retrieve_session(SSL *s, unsigned char *session_id, int len,
+		const unsigned char *limit, SSL_SESSION** out);
 SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket);
 
 /* some new methods for TPE */
 char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size);
 const long SSL_get_hash_code_from_cipher(const SSL_CIPHER* cipher);
 const EVP_MD *SSL_get_hash_from_code(const long cryptoHashCode);
+void SSL_get_hash_codes(const STACK_OF(SSL_CIPHER)* stack,
+		int* sha1, int* sha256, int* sha384);
 const long SSL_get_hmac_NID_from_hash_code(const long cryptoHashCode);
 const long SSL_get_byte_strength_from_hash_code(const long cryptoHashCode);
 const long SSL_get_weaker_from_hash_code(const long cryptoHashCode);
+STACK_OF(SSL_CIPHER)* SSL_filter_DH_and_ECDH_kxchng(const
+		STACK_OF(SSL_CIPHER)* source);
 RSA* SSL_get_peer_RSA_tmp_pubkey(const SSL* s);
 void SSL_set_peer_RSA_tmp_pubkey(const SSL* s, RSA* key);
 DH* SSL_get_peer_DHE_tmp_pubkey(const SSL* s);
@@ -1083,6 +1089,32 @@ int tls12_is_cipher_compatible_with_TPE(SSL *s);
 SESS_CERT* SSL_get_peer_cert(const SSL *s);
 int tls12_prx_accept(SSL *s);
 int tls12_prx_connect(SSL *s);
+int tls12_prx_clnt_get_tpe_value(SSL *s);
+int tls12_prx_srvr_get_tpe_value(SSL* s);
+int tls12_prx_clnt_hll_rcvd_cb(SSL* s, unsigned char* ext_data,
+		unsigned char* ext_data_limit);
+int tls12_prx_srvr_hll_rcvd_cb(SSL* s, unsigned char* ext_data,
+		unsigned char* ext_data_limit);
+int tls12_prx_srvr_crt_rcvd_cb(SSL* s, unsigned char* msg,
+		unsigned long msg_len);
+int tls12_prx_srvr_kxchange_rcvd_cb(SSL* s, unsigned char* msg,
+		unsigned long msg_len);
+int tls12_prx_crt_rqst_rcvd_cb(SSL* s, unsigned char* msg,
+		unsigned long msg_len);
+int tls12_prx_srvr_tckt_rcvd_cb(SSL* s, unsigned char* msg,
+		unsigned long msg_len);
+int tls12_prx_crt_status_rcvd_cb(SSL* s, unsigned char* msg,
+		unsigned long msg_len);
+int tls12_prx_clnt_crt_rcvd_cb(SSL* s, unsigned char* msg,
+		unsigned long msg_len);
+int tls12_prx_clnt_kxchange_rcvd_cb(SSL* s, unsigned char* msg,
+		unsigned long msg_len);
+int tls12_prx_crt_vrf_rcvd_cb(SSL* s, unsigned char* msg,
+		unsigned long msg_len);
+#ifndef OPENSSL_NO_NEXTPROTONEG
+int tls12_prx_clnt_npn_rcvd_cb(SSL* s, unsigned char* msg,
+		unsigned long msg_len);
+#endif
 /* this is where the new methods end */
 
 int ssl_cipher_id_cmp(const SSL_CIPHER *a, const SSL_CIPHER *b);
@@ -1117,7 +1149,7 @@ X509 *ssl_cert_get0_next_certificate(CERT *c, int first);
 void ssl_cert_set_cert_cb(CERT *c, int (*cb) (SSL *ssl, void *arg),
                           void *arg);
 
-int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int server_cert_chain);
+int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int cert_chain);
 int ssl_add_cert_chain(SSL *s, CERT_PKEY *cpk, unsigned long *l);
 int ssl_build_cert_chain(CERT *c, X509_STORE *chain_store, int flags);
 int ssl_cert_set_cert_store(CERT *c, X509_STORE *store, int chain, int ref);
@@ -1126,7 +1158,7 @@ int ssl_undefined_void_function(void);
 int ssl_undefined_const_function(const SSL *s);
 CERT_PKEY *ssl_get_server_send_pkey(const SSL *s);
 #  ifndef OPENSSL_NO_TLSEXT
-int ssl_get_server_cert_serverinfo(SSL *s, const unsigned char **serverinfo,
+int ssl_get_serverinfo_for_own_cert(SSL *s, const unsigned char **serverinfo,
                                    size_t *serverinfo_length);
 #  endif
 EVP_PKEY *ssl_get_sign_pkey(SSL *s, const SSL_CIPHER *c, const EVP_MD **pmd);
@@ -1283,7 +1315,7 @@ unsigned int dtls1_link_min_mtu(void);
 void dtls1_hm_fragment_free(hm_fragment *frag);
 
 /* some client-only functions */
-int ssl3_client_hello(SSL *s);
+int ssl3_send_client_hello(SSL *s);
 int ssl3_get_server_hello(SSL *s);
 int ssl3_get_certificate_request(SSL *s);
 int ssl3_get_new_session_ticket(SSL *s);

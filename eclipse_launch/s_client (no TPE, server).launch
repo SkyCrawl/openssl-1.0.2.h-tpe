@@ -18,7 +18,7 @@
 <stringAttribute key="org.eclipse.cdt.launch.DEBUGGER_START_MODE" value="run"/>
 <booleanAttribute key="org.eclipse.cdt.launch.DEBUGGER_STOP_AT_MAIN" value="true"/>
 <stringAttribute key="org.eclipse.cdt.launch.DEBUGGER_STOP_AT_MAIN_SYMBOL" value="main"/>
-<stringAttribute key="org.eclipse.cdt.launch.PROGRAM_ARGUMENTS" value="s_client -cert ${project_loc}/certs/tpe/newcerts/ee_client_cert.crt -key ${project_loc}/certs/tpe/private/ee_client_key.pem  -pass pass:&quot;just some password&quot; -CAfile ${project_loc}/certs/tpe/certs/ca_cert.crt -tls1_2 -connect localhost:4433"/>
+<stringAttribute key="org.eclipse.cdt.launch.PROGRAM_ARGUMENTS" value="s_client -cert ${project_loc}/certs/tpe/newcerts/ee_client_cert.crt -key ${project_loc}/certs/tpe/private/ee_client_key.pem  -pass pass:&quot;just some password&quot; -CAfile ${project_loc}/certs/tpe/certs/ca_cert.crt -tls1_2"/>
 <stringAttribute key="org.eclipse.cdt.launch.PROGRAM_NAME" value="${project_loc}/dist/bin/openssl"/>
 <stringAttribute key="org.eclipse.cdt.launch.PROJECT_ATTR" value="openssl"/>
 <booleanAttribute key="org.eclipse.cdt.launch.PROJECT_BUILD_CONFIG_AUTO_ATTR" value="false"/>

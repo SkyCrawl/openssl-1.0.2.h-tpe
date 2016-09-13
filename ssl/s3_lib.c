@@ -3566,7 +3566,8 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
             return 0;
 
     case SSL_CTRL_GET_SERVER_TMP_KEY:
-        if (SSL_is_server(s) || !s->session || !SSL_get_peer_cert(s))
+    	// TODO: end_cert or peer_cert? depends on usage...
+        if (SSL_is_server(s) || !s->session || !s->session->end_cert)
             return 0;
         else {
             EVP_PKEY *ptmp;

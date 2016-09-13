@@ -1237,7 +1237,8 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
     if (s->version >= TLS1_VERSION || SSL_IS_DTLS(s)) {
         int i;
         unsigned long alg_k, alg_a;
-        STACK_OF(SSL_CIPHER) *cipher_stack = SSL_get_ciphers(s);
+        STACK_OF(SSL_CIPHER) *cipher_stack = SSL_is_proxy(s) ?
+        		s->session->ciphers : SSL_get_ciphers(s);
 
         for (i = 0; i < sk_SSL_CIPHER_num(cipher_stack); i++) {
             SSL_CIPHER *c = sk_SSL_CIPHER_value(cipher_stack, i);
@@ -1520,7 +1521,8 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
 # endif
 
 # ifndef OPENSSL_NO_NEXTPROTONEG
-    if (s->ctx->next_proto_select_cb && !s->s3->tmp.finish_md_len) {
+    if ((SSL_is_proxy(s) && s->s3->next_proto_neg_seen) ||
+    		(SSL_is_client(s) && s->ctx->next_proto_select_cb && !s->s3->tmp.finish_md_len)) {
         /*
          * The client advertises an emtpy extension to indicate its support
          * for Next Protocol Negotiation
@@ -1532,14 +1534,21 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
     }
 # endif
 
-    if (s->alpn_client_proto_list && !s->s3->tmp.finish_md_len) {
-        if ((size_t)(limit - ret) < 6 + s->alpn_client_proto_list_len)
+    if ((SSL_is_proxy(s) && s->s3->alpn_selected) ||
+    		(SSL_is_client(s) && s->alpn_client_proto_list && !s->s3->tmp.finish_md_len)) {
+
+    	unsigned char* list = SSL_is_proxy(s) ? s->s3->alpn_selected :
+    			s->alpn_client_proto_list;
+    	long list_len = SSL_is_proxy(s) ? s->s3->alpn_selected_len :
+    			s->alpn_client_proto_list_len;
+    	if ((size_t)(limit - ret) < 6 + list_len) {
             return NULL;
+    	}
         s2n(TLSEXT_TYPE_application_layer_protocol_negotiation, ret);
-        s2n(2 + s->alpn_client_proto_list_len, ret);
-        s2n(s->alpn_client_proto_list_len, ret);
-        memcpy(ret, s->alpn_client_proto_list, s->alpn_client_proto_list_len);
-        ret += s->alpn_client_proto_list_len;
+        s2n(2 + list_len, ret);
+        s2n(list_len, ret);
+        memcpy(ret, list, list_len);
+        ret += list_len;
         s->cert->alpn_sent = 1;
     }
 # ifndef OPENSSL_NO_SRTP
@@ -1566,41 +1575,75 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
     {
     	/*
     	 * We can only do this when we're creating a new session
-    	 * or resume an inspected session.
+    	 * or resume an inspected session. Proxy should do this
+    	 * every time.
     	 */
+
+    	// for now, just decide whether we do this
     	int do_send_tpe;
-    	if (!s->renegotiate || s->new_session) {
+    	if (SSL_is_proxy(s)) {
+    		do_send_tpe = tls12_prx_clnt_get_tpe_value(s);
+    	} else if (!s->renegotiate || s->new_session) {
 			/*
 			 * When creating a new session (renegotiation or not),
 			 * the client must allow inspection, either globally
 			 * or specifically for this connection.
 			 */
-			// TODO: callback
-			do_send_tpe = SSL_CTX_get_tpe_support(s->ctx);
-		} else {
+    		do_send_tpe = SSL_CTX_get_tpe_support(s->ctx);
+    		// TODO: callback
+    	} else {
 			/*
-			 * When resuming an older session, the original decision
-			 * prevails as the extension's definition imposes the
-			 * session's inspection status on every new connection
+			 * When the client resumes an older session, the original
+			 * decision prevails as the extension's definition imposes
+			 * the session's inspection status on every new connection
 			 * bound to that session.
 			 */
 			do_send_tpe = s->session->is_inspected;
 		}
 
-    	// with this, all conditions regarding TPE have been asserted
-    	if(do_send_tpe) {
-    		// check for enough space
+    	// all conditions have been asserted, now on to the actual value
+    	if (do_send_tpe) {
+    		/*
+    		 * Check for enough space:
+    		 * - 2 bytes extension type
+    		 * - 2 bytes extension length
+    		 * - 1 byte extension content
+    		 */
 			if ((limit - ret - 5) < 0) {
 				return NULL;
 			}
 
+			// determine the value to send
+			unsigned char value = TLSEXT_TPE_CLIENT;
+			if (SSL_is_proxy(s)) {
+				value = do_send_tpe;
+				if ((value != TLSEXT_TPE_CLIENT) &&
+						(value != TLSEXT_TPE_PROXY)) {
+					return NULL;
+				}
+			}
+
 			// write the extension and data
 			s2n(TLSEXT_TYPE_trustworthy_proxy, ret);
-			s2n(sizeof(unsigned char), ret);
-			*(ret++) = TLSEXT_TPE_CLIENT;
+			s2n(sizeof(value), ret);
+			*(ret++) = value;
 
-			// log addition of this extension
-			s->tpe_included = 1;
+			/*
+			 * Log which value we sent.
+			 * Note: as of now, 'if(s->tpe_value)' is equivalent to asking:
+			 * - Have we sent the TPE extension at all?
+			 */
+			s->tpe_value = value;
+
+			/*
+			 * If we're a proxy, this is the time to set inspected status.
+			 * Incidentally, 'if(s->session->is_inspected)' will be equivalent
+			 * to asking:
+			 * - Have we applied public mode?
+			 */
+			if (SSL_is_proxy(s)) {
+				s->session->is_inspected = value == TLSEXT_TPE_PROXY;
+			}
     	}
     }
 
@@ -1852,16 +1895,39 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
      * we found no problem in support or conditions, we must
      * reply.
      */
-    if (s->tpe_included) {
-    	// check for enough space
+    if (s->tpe_value) {
+    	/*
+		 * Check for enough space:
+		 * - 2 bytes extension type
+		 * - 2 bytes extension length
+		 * - 1 byte extension content
+		 */
     	if ((limit - ret - 5) < 0) {
     		return NULL;
     	}
 
+    	// determine the value to send
+    	unsigned char value = TLSEXT_TPE_SERVER;
+    	if (SSL_is_proxy(s)) {
+    		value = tls12_prx_srvr_get_tpe_value(s);
+    		if (value <= 0) {
+    			// some kind of an error
+    			return NULL;
+    		} else if (value == TLSEXT_TPE_PROXY) {
+    			s->session->is_inspected = 1;
+    		}
+
+    		/*
+			 * As of now, 'if(s->session->is_inspected)' will be equivalent
+			 * to asking:
+			 * - Are we inspecting this communication?
+			 */
+    	}
+
     	// write the extension and data
     	s2n(TLSEXT_TYPE_trustworthy_proxy, ret);
-    	s2n(sizeof(unsigned char), ret);
-    	*(ret++) = TLSEXT_TPE_SERVER;
+    	s2n(sizeof(value), ret);
+    	*(ret++) = value;
     }
 
     if (!custom_ext_add(s, 1, &ret, limit, al))
@@ -2506,7 +2572,7 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p,
         		return 0;
         	} else { // if the conditions are right
         		// save the value for later
-        		s->tpe_included = 1 + data[0];
+        		s->tpe_value = data[0];
         	}
         }
 
@@ -2877,14 +2943,14 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p,
         	 * First check that the extension has been requested,
         	 * and by transition all of the required conditions.
         	 */
-			if (!s->tpe_included) {
+			if (!s->tpe_value) {
 				*al = TLS1_AD_UNSUPPORTED_EXTENSION;
 				return 0;
 			}
 
 			/*
 			 * We still haven't checked compatibility with the chosen
-			 * ciphersuite on the client though.
+			 * cipher suite though.
 			 */
 			if (!tls12_is_cipher_compatible_with_TPE(s)) {
 				*al = SSL_AD_ILLEGAL_PARAMETER;
@@ -2905,9 +2971,16 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p,
 					// nothing to be done, handshake continues as usual
 					break;
 				case TLSEXT_TPE_PROXY:
-					// inspection activated
-					s->session->is_inspected = 1;
-					break;
+					if (SSL_is_client(s)) {
+						// inspection activated
+						s->session->is_inspected = 1;
+						break;
+					}
+					/*
+					 * Else a proxy receives a TPE of 'proxy' and that's
+					 * not allowed => no break
+					 */
+
 				default: // including TLSEXT_TPE_CLIENT
 					*al = SSL_AD_ILLEGAL_PARAMETER;
 					return 0;
@@ -2928,10 +3001,10 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p,
     }
 
     // if server nor proxy give a response to our call
-    if(s->tpe_included && !tpe_seen) {
-    	if(s->hit) {
+    if (s->tpe_value && !tpe_seen) {
+    	if (s->hit) {
     		// we're resuming a session
-    		if(s->session->is_inspected) {
+    		if (s->session->is_inspected) {
     			/*
     			 * Session is inspected and therefore, connection must be
     			 * inspected.
@@ -2994,7 +3067,6 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p,
 
 int ssl_prepare_clienthello_tlsext(SSL *s)
 {
-
 # ifdef TLSEXT_TYPE_opaque_prf_input
     {
         int r = 1;
@@ -3251,7 +3323,7 @@ int ssl_check_clienthello_tlsext_late(SSL *s)
     }
 
     // handle TPE
-    if (s->tpe_included) {
+    if (s->tpe_value) {
 		/*
 		 * This is the reason why we can only really handle TPE
 		 * now... dependency on the chosen cipher suite.
@@ -3264,75 +3336,87 @@ int ssl_check_clienthello_tlsext_late(SSL *s)
 		}
 
 		/*
-		 * Next, decision whether we agree to TPE will greatly depend on client
-		 * authentication. Again, notice the dependency on the chosen cipher
-		 * suite.
+		 * Next, basic check of client's TPE value...
 		 */
-		ssl3_decide_on_client_auth(s);
 
-		// now onto the conditions...
-		if(s->hit) {
-			/*
-			 * When resuming a session, the original decision prevails
-			 * as the extension's definition imposes the session's
-			 * inspection status on every new connection bound to
-			 * that session.
-			 */
-			if(!s->session->is_inspected) {
-				/*
-				 * The client is trying to resume a non-inspected
-				 * session and make the new connection inspected...
-				 */
+		switch (s->tpe_value) {
+		case TLSEXT_TPE_CLIENT:
+			// for now, do nothing
+			break;
+
+		case TLSEXT_TPE_PROXY:
+			if (SSL_is_proxy(s)) {
 				ret = SSL_TLSEXT_ERR_ALERT_FATAL;
 				al = SSL_AD_ILLEGAL_PARAMETER;
 				goto err;
 			}
-		} else {
-			/*
-			 * When creating a new session, the server must allow
-			 * inspection globally and check if it's only enabled
-			 * for regular sessions without client authentication.
-			 */
-			int tpe_allowed;
-			if (s->s3->tmp.cert_request) {
-				tpe_allowed = SSL_CTX_get_tpe_support(s->ctx) &&
-					!SSL_CTX_get_tpe_client_anon_only(s->ctx);
-			} else {
-				tpe_allowed = SSL_CTX_get_tpe_support(s->ctx);
-			}
-
-			// if server doesn't allow inspection, deny it
-			if(!tpe_allowed) {
-				ret = SSL_TLSEXT_ERR_ALERT_FATAL;
-				al = SSL_AD_INSPECTION_DENIED;
-				goto err;
-			}
-		}
-
-		/*
-		 * Ok, TPE is totally allowed now...
-		 */
-
-		// pick up the value from client
-		int value = s->tpe_included - 1;
-
-		// and handle the value...
-		switch (value) {
-		case TLSEXT_TPE_CLIENT:
-			// nothing to be done, handshake continues as usual
 			break;
-		case TLSEXT_TPE_PROXY:
-			// inspection activated
-			s->session->is_inspected = 1;
-			break;
+
 		default: // including TLSEXT_TPE_SERVER
 			ret = SSL_TLSEXT_ERR_ALERT_FATAL;
 			al = SSL_AD_ILLEGAL_PARAMETER;
 			goto err;
 		}
 
-		// log having seen the extension in ClientHello (reset indicator)
-		s->tpe_included = 1;
+		/*
+		 * At this point, there are no other checks or actions
+		 * for the proxy to take...
+		 */
+		if (SSL_is_server(s)) {
+			/*
+			 * Decision whether we agree to TPE will greatly depend
+			 * on client authentication.
+			 * Again, notice the dependency on the chosen cipher suite.
+			 * Only for servers though, not proxies.
+			 */
+			ssl3_decide_on_client_auth(s);
+
+			int peer_proxy = s->tpe_value == TLSEXT_TPE_PROXY;
+			if(s->hit) {
+				/*
+				 * When resuming a session, the original decision prevails
+				 * as the extension's definition imposes the session's
+				 * inspection status on every new connection bound to
+				 * that session.
+				 */
+				if (peer_proxy != s->session->is_inspected) {
+					/*
+					 * 1) A proxy is trying to resume a non-inspected
+					 * session with us and make the new connection
+					 * inspected...
+					 * 2) A proxy inspected the original session but
+					 * now, there seems to be none...
+					 */
+					ret = SSL_TLSEXT_ERR_ALERT_FATAL;
+					al = SSL_AD_ILLEGAL_PARAMETER;
+					goto err;
+				} else {
+					s->session->is_inspected = peer_proxy;
+				}
+			} else if (peer_proxy) {
+				/*
+				 * When creating a new inspected session, the server
+				 * must allow it globally and check whether it's only
+				 * enabled for sessions without client authentication.
+				 */
+				int inspection_allowed;
+				if (s->s3->tmp.cert_request) {
+					inspection_allowed = SSL_CTX_get_tpe_support(s->ctx) ==
+							TLSEXT_TPESUPPORT_ENABLED;
+				} else {
+					inspection_allowed = SSL_CTX_get_tpe_support(s->ctx) > 0;
+				}
+
+				// if server doesn't allow inspection, deny it
+				if(!inspection_allowed) {
+					ret = SSL_TLSEXT_ERR_ALERT_FATAL;
+					al = SSL_AD_INSPECTION_DENIED;
+					goto err;
+				} else {
+					s->session->is_inspected = 1;
+				}
+			}
+		}
     }
 
  err:

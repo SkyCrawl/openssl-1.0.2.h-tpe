@@ -423,9 +423,8 @@ SSL *SSL_new(SSL_CTX *ctx)
     if (!s->method->ssl_new(s))
         goto err;
 
-    s->role = (ctx->method->ssl_accept == ssl_undefined_function) ?
-    		SSL_ROLE_CLIENT : SSL_ROLE_SERVER;
-
+    SSL_set_role(s, ctx->method->ssl_accept == ssl_undefined_function ?
+    		SSL_ROLE_CLIENT : SSL_ROLE_SERVER, 1);
     SSL_clear(s);
 
     CRYPTO_new_ex_data(CRYPTO_EX_INDEX_SSL, s, &s->ex_data);
@@ -903,8 +902,8 @@ X509* SSL_get_peer_x509(const SSL *s)
         return NULL;
     }
     else {
-    	X509 *r = s->session->is_inspected ? s->session->proxy :
-        		s->session->peer;
+    	X509 *r = s->session->is_inspected ? s->session->peer_key :
+        		s->session->server_key;
     	if(r != NULL) {
     		CRYPTO_add(&r->references, 1, CRYPTO_LOCK_X509);
     	}
@@ -918,8 +917,8 @@ SESS_CERT* SSL_get_peer_cert(const SSL *s)
         return NULL;
     }
     else {
-        return s->session->is_inspected ? s->session->proxy_cert :
-        		s->session->sess_cert;
+        return s->session->peer_cert == NULL ? s->session->end_cert :
+        		s->session->peer_cert;
     }
 }
 
@@ -1635,66 +1634,42 @@ STACK_OF(SSL_CIPHER) *ssl_bytes_to_cipher_list(SSL *s, unsigned char *p,
 #ifndef OPENSSL_NO_RSA
 RSA* SSL_get_peer_RSA_tmp_pubkey(const SSL* s)
 {
-	return s->session->is_inspected ? s->session->proxy_cert->peer_rsa_tmp :
-			s->session->sess_cert->peer_rsa_tmp;
+	return s->session->peer_cert->peer_rsa_tmp;
 }
 void SSL_set_peer_RSA_tmp_pubkey(const SSL* s, RSA* key)
 {
-	if(s->session->is_inspected) {
-		if(s->session->proxy_cert->peer_rsa_tmp != NULL) {
-			RSA_free(s->session->proxy_cert->peer_rsa_tmp);
-		}
-		s->session->proxy_cert->peer_rsa_tmp = key;
-	} else {
-		if(s->session->sess_cert->peer_rsa_tmp != NULL) {
-			RSA_free(s->session->sess_cert->peer_rsa_tmp);
-		}
-		s->session->sess_cert->peer_rsa_tmp = key;
+	if(s->session->peer_cert->peer_rsa_tmp != NULL) {
+		RSA_free(s->session->peer_cert->peer_rsa_tmp);
 	}
+	s->session->peer_cert->peer_rsa_tmp = key;
 }
 #endif
 
 #ifndef OPENSSL_NO_DH
 DH* SSL_get_peer_DHE_tmp_pubkey(const SSL* s)
 {
-	return s->session->is_inspected ? s->session->proxy_cert->peer_dh_tmp :
-			s->session->sess_cert->peer_dh_tmp;
+	return s->session->peer_cert->peer_dh_tmp;
 }
 void SSL_set_peer_DHE_tmp_pubkey(const SSL* s, DH* key)
 {
-	if(s->session->is_inspected) {
-		if(s->session->proxy_cert->peer_dh_tmp != NULL) {
-			DH_free(s->session->proxy_cert->peer_dh_tmp);
-		}
-		s->session->proxy_cert->peer_dh_tmp = key;
-	} else {
-		if(s->session->sess_cert->peer_dh_tmp != NULL) {
-			DH_free(s->session->sess_cert->peer_dh_tmp);
-		}
-		s->session->sess_cert->peer_dh_tmp = key;
+	if(s->session->peer_cert->peer_dh_tmp != NULL) {
+		DH_free(s->session->peer_cert->peer_dh_tmp);
 	}
+	s->session->peer_cert->peer_dh_tmp = key;
 }
 #endif
 
 #ifndef OPENSSL_NO_ECDH
 EC_KEY* SSL_get_peer_ECDHE_tmp_pubkey(const SSL* s)
 {
-	return s->session->is_inspected ? s->session->proxy_cert->peer_ecdh_tmp :
-			s->session->sess_cert->peer_ecdh_tmp;
+	return s->session->peer_cert->peer_ecdh_tmp;
 }
 void SSL_set_peer_ECDHE_tmp_pubkey(const SSL* s, EC_KEY* key)
 {
-	if(s->session->is_inspected) {
-		if(s->session->proxy_cert->peer_ecdh_tmp != NULL) {
-			EC_KEY_free(s->session->proxy_cert->peer_ecdh_tmp);
-		}
-		s->session->proxy_cert->peer_ecdh_tmp = key;
-	} else {
-		if(s->session->sess_cert->peer_ecdh_tmp != NULL) {
-			EC_KEY_free(s->session->sess_cert->peer_ecdh_tmp);
-		}
-		s->session->sess_cert->peer_ecdh_tmp = key;
+	if(s->session->peer_cert->peer_ecdh_tmp != NULL) {
+		EC_KEY_free(s->session->peer_cert->peer_ecdh_tmp);
 	}
+	s->session->peer_cert->peer_ecdh_tmp = key;
 }
 #endif
 
@@ -2632,7 +2607,7 @@ int ssl_check_srvr_ecc_cert_and_alg(X509 *x, SSL *s)
 
 #endif
 
-static int ssl_get_server_cert_index(const SSL *s)
+static int ssl_get_index_of_own_cert(const SSL *s)
 {
     int idx;
     idx = ssl_cipher_get_cert_index(s->s3->tmp.new_cipher);
@@ -2662,7 +2637,7 @@ CERT_PKEY *ssl_get_server_send_pkey(const SSL *s)
         return c->key;
 #endif
 
-    i = ssl_get_server_cert_index(s);
+    i = ssl_get_index_of_own_cert(s);
 
     /* This may or may not be an error. */
     if (i < 0)
@@ -2713,7 +2688,7 @@ EVP_PKEY *ssl_get_sign_pkey(SSL *s, const SSL_CIPHER *cipher,
 }
 
 #ifndef OPENSSL_NO_TLSEXT
-int ssl_get_server_cert_serverinfo(SSL *s, const unsigned char **serverinfo,
+int ssl_get_serverinfo_for_own_cert(SSL *s, const unsigned char **serverinfo,
                                    size_t *serverinfo_length)
 {
     CERT *c = NULL;
@@ -2721,7 +2696,7 @@ int ssl_get_server_cert_serverinfo(SSL *s, const unsigned char **serverinfo,
     *serverinfo_length = 0;
 
     c = s->cert;
-    i = ssl_get_server_cert_index(s);
+    i = ssl_get_index_of_own_cert(s);
 
     if (i == -1)
         return 0;
@@ -2905,7 +2880,8 @@ int SSL_do_handshake(SSL *s)
  */
 void SSL_set_accept_state(SSL *s)
 {
-    s->role = SSL_ROLE_SERVER;
+	// TODO: can we force (proxy...)?
+	SSL_set_role(s, SSL_ROLE_SERVER, 0);
     s->shutdown = 0;
     s->state = SSL_ST_ACCEPT | SSL_ST_BEFORE;
     s->handshake_func = s->method->ssl_accept;
@@ -2917,7 +2893,8 @@ void SSL_set_accept_state(SSL *s)
 
 void SSL_set_connect_state(SSL *s)
 {
-    s->role = SSL_ROLE_CLIENT;
+	// TODO: can we force (proxy...)?
+	SSL_set_role(s, SSL_ROLE_CLIENT, 0);
     s->shutdown = 0;
     s->state = SSL_ST_CONNECT | SSL_ST_BEFORE;
     s->handshake_func = s->method->ssl_connect;
@@ -3213,6 +3190,45 @@ const EVP_MD *SSL_get_hash_from_code(const long cryptoHashCode)
 	}
 }
 
+void SSL_get_hash_codes(const STACK_OF(SSL_CIPHER)* stack,
+		int* sha1, int* sha256, int* sha384)
+{
+	for (int i = 0; i < sk_SSL_CIPHER_num(stack); i++) {
+		const SSL_CIPHER* c = sk_SSL_CIPHER_value(stack, i);
+		const long code = SSL_get_hash_code_from_cipher(c);
+		switch (code) {
+		case SSL_SHA1:
+			*sha1 = 1;
+			break;
+		case SSL_SHA256:
+			*sha256 = 1;
+			break;
+		case SSL_SHA384:
+			*sha384 = 1;
+			break;
+		default:
+			break;
+		}
+	}
+}
+
+void SSL_filter_by_hash_codes(STACK_OF(SSL_CIPHER)* stack,
+		int sha1, int sha256, int sha384)
+{
+	for (int i = sk_SSL_CIPHER_num(stack) - 1; i >= 0; i--) {
+		SSL_CIPHER* c = sk_SSL_CIPHER_value(stack, i);
+		const long code = SSL_get_hash_code_from_cipher(c);
+		int evict = ((code != SSL_SHA1) && (code != SSL_SHA256) &&
+				(code != SSL_SHA384));
+		evict |= ((code == SSL_SHA1) && !sha1) ||
+				((code == SSL_SHA256) && !sha256) ||
+				((code == SSL_SHA384) && !sha384);
+		if (evict) {
+			sk_SSL_CIPHER_delete(stack, i);
+		}
+	}
+}
+
 const long SSL_get_hmac_NID_from_hash_code(const long cryptoHashCode)
 {
 	switch (cryptoHashCode) {
@@ -3261,6 +3277,19 @@ const long SSL_get_weaker_from_hash_code(const long cryptoHashCode)
 			// should never happen (not supported at the moment)
 			return 0;
 	}
+}
+
+STACK_OF(SSL_CIPHER)* SSL_filter_DH_and_ECDH_kxchng(const STACK_OF(SSL_CIPHER)* source)
+{
+	STACK_OF(SSL_CIPHER)* result = sk_SSL_CIPHER_dup(source);
+	for (int i = sk_SSL_CIPHER_num(result) - 1; i >= 0; i--) {
+		SSL_CIPHER* c = sk_SSL_CIPHER_value(result, i);
+		if (c->algorithm_mkey & (SSL_kDHd | SSL_kDHr | SSL_kECDHe | SSL_kECDHr)) {
+			// evict implicit key exchange
+			sk_SSL_CIPHER_delete(result, i);
+		}
+	}
+	return result;
 }
 
 #ifdef OPENSSL_NO_COMP
@@ -3769,6 +3798,15 @@ void SSL_set_debug(SSL *s, int debug)
 int SSL_cache_hit(SSL *s)
 {
     return s->hit;
+}
+
+void SSL_set_role(SSL *s, int role, int force)
+{
+	if (s->role) {
+		s->role = force ? role : s->role;
+	} else {
+		s->role = role;
+	}
 }
 
 int SSL_is_server(SSL *s)

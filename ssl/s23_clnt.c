@@ -179,7 +179,7 @@ int ssl23_connect(SSL *s)
                 ret = -1;
                 goto end;
             }
-            s->role = SSL_ROLE_CLIENT;
+            SSL_set_role(s, SSL_ROLE_CLIENT, 1);
             if (cb != NULL)
                 cb(s, SSL_CB_HANDSHAKE_START, 1);
 
