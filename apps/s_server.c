@@ -1131,7 +1131,7 @@ int MAIN(int argc, char *argv[])
 # endif
     const char *alpn_in = NULL;
     tlsextalpnctx alpn_ctx = { NULL, 0 };
-    int allow_tpe, allow_tpe_client_anon_only = 0;
+    int tpe_support = 0;
 #endif
 #ifndef OPENSSL_NO_PSK
     /* by default do not send a PSK identity hint */
@@ -1537,11 +1537,10 @@ int MAIN(int argc, char *argv[])
             alpn_in = *(++argv);
         }
         else if (strcmp(*argv, "-tpe") == 0) {
-            allow_tpe = 1;
+            tpe_support = TLSEXT_TPESUPPORT_ENABLED;
         }
         else if (strcmp(*argv, "-tpe_not_client_auth") == 0) {
-			allow_tpe = 1;
-			allow_tpe_client_anon_only = 1;
+			tpe_support = TLSEXT_TPESUPPORT_NOT_CLIENT_AUTH;
 		}
 #endif
 #if !defined(OPENSSL_NO_JPAKE) && !defined(OPENSSL_NO_PSK)
@@ -1946,8 +1945,8 @@ int MAIN(int argc, char *argv[])
         goto end;
     }
 
-    SSL_CTX_set_tpe_support(ctx, allow_tpe);
-    SSL_CTX_set_tpe_client_anon_only(ctx, allow_tpe_client_anon_only);
+    // register TPE support
+    SSL_CTX_set_tpe_support(ctx, tpe_support);
 
     if (ctx2 && !set_cert_key_stuff(ctx2, s_cert2, s_key2, NULL, build_chain))
         goto end;

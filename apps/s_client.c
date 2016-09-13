@@ -714,7 +714,7 @@ int MAIN(int argc, char **argv)
 #ifndef OPENSSL_NO_TLSEXT
     char *servername = NULL;
     tlsextctx tlsextcbp = { NULL, 0 };
-    int allow_tpe = 0;
+    int tpe_support = 0;
 # ifndef OPENSSL_NO_NEXTPROTONEG
     const char *next_proto_neg_in = NULL;
 # endif
@@ -878,7 +878,7 @@ int MAIN(int argc, char **argv)
         else if (strcmp(*argv, "-status") == 0)
             c_status_req = 1;
         else if (strcmp(*argv, "-tpe") == 0)
-        	allow_tpe = 1;
+        	tpe_support = TLSEXT_TPESUPPORT_ENABLED;
 #endif
 #ifdef WATT32
         else if (strcmp(*argv, "-wdebug") == 0)
@@ -1330,7 +1330,9 @@ int MAIN(int argc, char **argv)
         SSL_CTX_set_alpn_protos(ctx, alpn, alpn_len);
         OPENSSL_free(alpn);
     }
-    SSL_CTX_set_tpe_support(ctx, allow_tpe);
+
+    // register TPE support
+    SSL_CTX_set_tpe_support(ctx, tpe_support);
 #endif
 #ifndef OPENSSL_NO_TLSEXT
     for (i = 0; i < serverinfo_types_count; i++) {
