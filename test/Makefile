@@ -826,7 +826,11 @@ shatest.o: ../include/openssl/objects.h ../include/openssl/opensslconf.h
 shatest.o: ../include/openssl/opensslv.h ../include/openssl/ossl_typ.h
 shatest.o: ../include/openssl/safestack.h ../include/openssl/sha.h
 shatest.o: ../include/openssl/stack.h ../include/openssl/symhacks.h shatest.c
-srptest.o: ../include/openssl/opensslconf.h srptest.c
+srptest.o: ../include/openssl/buffer.h ../include/openssl/crypto.h
+srptest.o: ../include/openssl/e_os2.h ../include/openssl/opensslconf.h
+srptest.o: ../include/openssl/opensslv.h ../include/openssl/ossl_typ.h
+srptest.o: ../include/openssl/safestack.h ../include/openssl/stack.h
+srptest.o: ../include/openssl/symhacks.h srptest.c
 ssltest.o: ../e_os.h ../include/openssl/asn1.h ../include/openssl/bio.h
 ssltest.o: ../include/openssl/bn.h ../include/openssl/buffer.h
 ssltest.o: ../include/openssl/comp.h ../include/openssl/conf.h

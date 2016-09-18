@@ -892,8 +892,9 @@ int ssl3_get_client_hello(SSL *s)
 #endif
     STACK_OF(SSL_CIPHER) *ciphers = NULL;
 
-    if (s->state == SSL3_ST_SR_CLNT_HELLO_C && !s->first_packet)
+    if (s->state == SSL3_ST_SR_CLNT_HELLO_C && !s->first_packet) {
         goto retry_cert;
+    }
 
     /*
      * We do this so that we will respond with our native type. If we are
@@ -904,6 +905,7 @@ int ssl3_get_client_hello(SSL *s)
     if (s->state == SSL3_ST_SR_CLNT_HELLO_A) {
         s->state = SSL3_ST_SR_CLNT_HELLO_B;
     }
+
     s->first_packet = 1;
     n = s->method->ssl_get_message(s,
                                    SSL3_ST_SR_CLNT_HELLO_B,
@@ -911,20 +913,29 @@ int ssl3_get_client_hello(SSL *s)
                                    SSL3_MT_CLIENT_HELLO,
                                    SSL3_RT_MAX_PLAIN_LENGTH, &ok);
 
-    if (!ok)
+    if (!ok) {
         return ((int)n);
-    s->first_packet = 0;
-    d = p = (unsigned char *)s->init_msg;
-
-    /*
-     * 2 bytes for client version, SSL3_RANDOM_SIZE bytes for random, 1 byte
-     * for session id length
-     */
-    if (n < 2 + SSL3_RANDOM_SIZE + 1) {
-        al = SSL_AD_DECODE_ERROR;
-        SSLerr(SSL_F_SSL3_GET_CLIENT_HELLO, SSL_R_LENGTH_TOO_SHORT);
-        goto f_err;
+    } else {
+    	s->first_packet = 0;
+    	d = p = (unsigned char *)s->init_msg;
     }
+
+    if (n < 2 + SSL3_RANDOM_SIZE + 1) {
+    	/*
+		 * 2 bytes for client version, SSL3_RANDOM_SIZE bytes for random, 1 byte
+		 * for session id length
+		 */
+		al = SSL_AD_DECODE_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CLIENT_HELLO, SSL_R_LENGTH_TOO_SHORT);
+		goto f_err;
+	} else if (SSL_is_proxy(s)) {
+		/*
+		 * Ignore the function result and always process Hello messages
+		 * until the next callback, where the decision about forwarding
+		 * will take place.
+		 */
+		tls12_prx_msg_rcvd_early_cb(s, p, n, s->s3->tmp.message_type);
+	}
 
     /*
      * use version from inside client hello, not from record header (may
@@ -976,6 +987,12 @@ int ssl3_get_client_hello(SSL *s)
 
     /* get the session-id */
     j = *(p++);
+
+    // back it up so we can use it later in relation with 's->hit'
+    if (SSL_is_proxy(s)) {
+    	// temporary storage...
+    	s->prx_simply_forward = j;
+    }
 
     if (p + j > d + n) {
         al = SSL_AD_DECODE_ERROR;
@@ -1129,19 +1146,8 @@ int ssl3_get_client_hello(SSL *s)
         al = SSL_AD_DECODE_ERROR;
         SSLerr(SSL_F_SSL3_GET_CLIENT_HELLO, SSL_R_LENGTH_MISMATCH);
         goto f_err;
-    }
-    if (ssl_bytes_to_cipher_list(s, p, i, &(ciphers)) == NULL) {
+    } else if (ssl_bytes_to_cipher_list(s, p, i, &(ciphers)) == NULL) {
         goto err;
-    } else if (SSL_is_proxy(s)) {
-    	/*
-		 * For client authentication to work, we need to evict DH or ECDH from
-		 * client's list of cipher suites ahead of time, just as we will do with
-		 * the proxy's list, before sending it to the server. An alternative is
-		 * to support independent key exchange negotiation.
-		 */
-		STACK_OF(SSL_CIPHER)* filtered = SSL_filter_DH_and_ECDH_kxchng(ciphers);
-		sk_SSL_CIPHER_free(ciphers);
-		ciphers = filtered;
     }
 
     p += i;
@@ -1246,8 +1252,7 @@ int ssl3_get_client_hello(SSL *s)
         }
     }
 
-    if (!s->hit && s->version >= TLS1_VERSION && SSL_is_server(s) &&
-    		s->tls_session_secret_cb) {
+    if (!s->hit && s->version >= TLS1_VERSION && s->tls_session_secret_cb) {
         SSL_CIPHER *pref_cipher = NULL;
 
         s->session->master_key_length = sizeof(s->session->master_key);
@@ -1403,15 +1408,16 @@ int ssl3_get_client_hello(SSL *s)
 				}
 				s->rwstate = SSL_NOTHING;
 			}
-			c = ssl3_choose_cipher(s, s->session->ciphers, SSL_get_ciphers(s));
-
-			if (c == NULL) {
-				al = SSL_AD_HANDSHAKE_FAILURE;
-				SSLerr(SSL_F_SSL3_GET_CLIENT_HELLO, SSL_R_NO_SHARED_CIPHER);
-				goto f_err;
-			}
-			s->s3->tmp.new_cipher = c;
         }
+
+        // pick a cipher suite for the client
+        c = ssl3_choose_cipher(s, s->session->ciphers, SSL_get_ciphers(s));
+		if (c == NULL) {
+			al = SSL_AD_HANDSHAKE_FAILURE;
+			SSLerr(SSL_F_SSL3_GET_CLIENT_HELLO, SSL_R_NO_SHARED_CIPHER);
+			goto f_err;
+		}
+		s->s3->tmp.new_cipher = c;
     } else {
         /* Session-id reuse */
 #ifdef REUSE_CIPHER_BUG
@@ -1469,6 +1475,7 @@ int ssl3_get_client_hello(SSL *s)
     	goto f_err;
     }
 
+ done:
     ret = cookie_valid ? 2 : 1;
     if (0) {
  f_err:
@@ -1476,7 +1483,6 @@ int ssl3_get_client_hello(SSL *s)
  err:
         s->state = SSL_ST_ERR;
     }
-
     if (ciphers != NULL) {
         sk_SSL_CIPHER_free(ciphers);
     }
@@ -1598,7 +1604,6 @@ int ssl3_send_server_hello(SSL *s)
             *(p++) = s->s3->tmp.new_compression->id;
 #endif
 #ifndef OPENSSL_NO_TLSEXT
-        // TODO: proxy handling
         if (ssl_prepare_serverhello_tlsext(s) <= 0) {
             SSLerr(SSL_F_SSL3_SEND_SERVER_HELLO, SSL_R_SERVERHELLO_TLSEXT);
             s->state = SSL_ST_ERR;
@@ -1793,59 +1798,82 @@ int ssl3_send_server_key_exchange(SSL *s)
 #ifndef OPENSSL_NO_DH
         // DHE
         if (type & SSL_kEDH) {
-            dhp = cert->dh_tmp;
-            if ((dhp == NULL) && (s->cert->dh_tmp_cb != NULL))
-                dhp = s->cert->dh_tmp_cb(s,
-                                         SSL_C_IS_EXPORT(s->s3->
-                                                         tmp.new_cipher),
-                                         SSL_C_EXPORT_PKEYLENGTH(s->s3->
-                                                                 tmp.new_cipher));
-            if (dhp == NULL) {
-                al = SSL_AD_HANDSHAKE_FAILURE;
-                SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE,
-                       SSL_R_MISSING_TMP_DH_KEY);
-                goto f_err;
-            }
+        	// client authentication has a direct effect on this behavior
+        	if (SSL_is_proxy(s) && s->s3->tmp.cert_request) {
+        		// proxy MUST use server's parameters
+        		dhp = s->s3->tmp.dh; // this is a copy of server's public key
+        	} else {
+				dhp = cert->dh_tmp;
+				if ((dhp == NULL) && (s->cert->dh_tmp_cb != NULL))
+					dhp = s->cert->dh_tmp_cb(s,
+											 SSL_C_IS_EXPORT(s->s3->
+															 tmp.new_cipher),
+											 SSL_C_EXPORT_PKEYLENGTH(s->s3->
+																	 tmp.new_cipher));
+				if (s->s3->tmp.dh != NULL) {
+					SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE,
+						   ERR_R_INTERNAL_ERROR);
+					goto err;
+				}
+        	}
 
-            if (s->s3->tmp.dh != NULL) {
-                SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE,
-                       ERR_R_INTERNAL_ERROR);
-                goto err;
-            }
+        	// identical common behavior after that
+        	// first some checks:
+			if (dhp == NULL) {
+				al = SSL_AD_HANDSHAKE_FAILURE;
+				SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE,
+					   SSL_R_MISSING_TMP_DH_KEY);
+				goto f_err;
+			}
+			if ((dh = DHparams_dup(dhp)) == NULL) {
+				SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE, ERR_R_DH_LIB);
+				goto err;
+			}
 
-            if ((dh = DHparams_dup(dhp)) == NULL) {
-                SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE, ERR_R_DH_LIB);
-                goto err;
-            }
+			// generate server's or proxy's public key
+			if (!DH_generate_key(dh)) {
+				SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE, ERR_R_DH_LIB);
+				goto err;
+			}
 
-            s->s3->tmp.dh = dh;
-            if (!DH_generate_key(dh)) {
-                SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE, ERR_R_DH_LIB);
-                goto err;
-            }
-            r[0] = dh->p;
-            r[1] = dh->g;
-            r[2] = dh->pub_key;
+			// and register the result
+			s->s3->tmp.dh = dh;
+			r[0] = dh->p;
+			r[1] = dh->g;
+			r[2] = dh->pub_key;
         } else
 #endif
 #ifndef OPENSSL_NO_ECDH
         // ECDHE
         if (type & SSL_kEECDH) {
-            const EC_GROUP *group;
+        	// client authentication has a direct effect on this behavior
+			if (SSL_is_proxy(s) && s->s3->tmp.cert_request) {
+				// proxy MUST use server's parameters
+				ecdhp = s->s3->tmp.ecdh;
+				// EC_KEY_set_group(ecdh, ngroup);
+				// EC_KEY_set_public_key(ecdh, srvr_ecpoint);
+			} else if (s->s3->tmp.ecdh != NULL) {
+                SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE,
+                       ERR_R_INTERNAL_ERROR);
+                goto err;
+            } else {
+				ecdhp = cert->ecdh_tmp;
+				if (s->cert->ecdh_tmp_auto) {
+					/* Get NID of appropriate shared curve */
+					int nid = tls1_shared_curve(s, -2);
+					if (nid != NID_undef)
+						ecdhp = EC_KEY_new_by_curve_name(nid);
+				} else if ((ecdhp == NULL) && s->cert->ecdh_tmp_cb) {
+					ecdhp = s->cert->ecdh_tmp_cb(s,
+												 SSL_C_IS_EXPORT(s->s3->
+																 tmp.new_cipher),
+												 SSL_C_EXPORT_PKEYLENGTH(s->
+																		 s3->tmp.new_cipher));
+				}
+			}
 
-            ecdhp = cert->ecdh_tmp;
-            if (s->cert->ecdh_tmp_auto) {
-                /* Get NID of appropriate shared curve */
-                int nid = tls1_shared_curve(s, -2);
-                if (nid != NID_undef)
-                    ecdhp = EC_KEY_new_by_curve_name(nid);
-            } else if ((ecdhp == NULL) && s->cert->ecdh_tmp_cb) {
-                ecdhp = s->cert->ecdh_tmp_cb(s,
-                                             SSL_C_IS_EXPORT(s->s3->
-                                                             tmp.new_cipher),
-                                             SSL_C_EXPORT_PKEYLENGTH(s->
-                                                                     s3->tmp.new_cipher));
-            }
+			// identical common behavior after that
+			// first some checks:
             if (ecdhp == NULL) {
                 al = SSL_AD_HANDSHAKE_FAILURE;
                 SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE,
@@ -1853,25 +1881,18 @@ int ssl3_send_server_key_exchange(SSL *s)
                 goto f_err;
             }
 
-            if (s->s3->tmp.ecdh != NULL) {
-                SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE,
-                       ERR_R_INTERNAL_ERROR);
-                goto err;
-            }
-
-            /* Duplicate the ECDH structure. */
-            if (ecdhp == NULL) {
-                SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE, ERR_R_ECDH_LIB);
-                goto err;
-            }
-            if (s->cert->ecdh_tmp_auto)
+            // in certain cases, we have to duplicate the received key...
+            if (s->cert->ecdh_tmp_auto) {
                 ecdh = ecdhp;
-            else if ((ecdh = EC_KEY_dup(ecdhp)) == NULL) {
+            } else if ((ecdh = EC_KEY_dup(ecdhp)) == NULL) {
                 SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE, ERR_R_ECDH_LIB);
                 goto err;
             }
 
+            // save server's or proxy's key
             s->s3->tmp.ecdh = ecdh;
+
+            // generate private key if needed
             if ((EC_KEY_get0_public_key(ecdh) == NULL) ||
                 (EC_KEY_get0_private_key(ecdh) == NULL) ||
                 (s->options & SSL_OP_SINGLE_ECDH_USE)) {
@@ -1882,13 +1903,17 @@ int ssl3_send_server_key_exchange(SSL *s)
                 }
             }
 
+            /*
+             * Check parameters.
+             */
+
+            const EC_GROUP *group;
             if (((group = EC_KEY_get0_group(ecdh)) == NULL) ||
                 (EC_KEY_get0_public_key(ecdh) == NULL) ||
                 (EC_KEY_get0_private_key(ecdh) == NULL)) {
                 SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE, ERR_R_ECDH_LIB);
                 goto err;
             }
-
             if (SSL_C_IS_EXPORT(s->s3->tmp.new_cipher) &&
                 (EC_GROUP_get_degree(group) > 163)) {
                 SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE,
@@ -1897,7 +1922,7 @@ int ssl3_send_server_key_exchange(SSL *s)
             }
 
             /*
-             * XXX: For now, we only support ephemeral ECDH keys over named
+             * XXX: For now, we only support ECDHE keys over named
              * (not generic) curves. For supported named curves, curve_id is
              * non-zero.
              */
@@ -1913,36 +1938,36 @@ int ssl3_send_server_key_exchange(SSL *s)
              * Encode the public key. First check the size of encoding and
              * allocate memory accordingly.
              */
+            bn_ctx = BN_CTX_new();
             encodedlen = EC_POINT_point2oct(group,
                                             EC_KEY_get0_public_key(ecdh),
                                             POINT_CONVERSION_UNCOMPRESSED,
                                             NULL, 0, NULL);
-
             encodedPoint = (unsigned char *)
                 OPENSSL_malloc(encodedlen * sizeof(unsigned char));
-            bn_ctx = BN_CTX_new();
             if ((encodedPoint == NULL) || (bn_ctx == NULL)) {
                 SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE,
                        ERR_R_MALLOC_FAILURE);
                 goto err;
             }
 
+            // somehow, this needs to be redone...
             encodedlen = EC_POINT_point2oct(group,
                                             EC_KEY_get0_public_key(ecdh),
                                             POINT_CONVERSION_UNCOMPRESSED,
                                             encodedPoint, encodedlen, bn_ctx);
-
             if (encodedlen == 0) {
                 SSLerr(SSL_F_SSL3_SEND_SERVER_KEY_EXCHANGE, ERR_R_ECDH_LIB);
                 goto err;
             }
 
+            // cleanup
             BN_CTX_free(bn_ctx);
             bn_ctx = NULL;
 
             /*
              * XXX: For now, we only support named (not generic) curves in
-             * ECDH ephemeral key exchanges. In this situation, we need four
+             * ECDHE key exchanges. In this situation, we need four
              * additional bytes to encode the entire ServerECDHParams
              * structure.
              */
@@ -2264,7 +2289,7 @@ int ssl3_send_certificate_request(SSL *s)
 int ssl3_get_client_key_exchange(SSL *s)
 {
     int i, al, ok;
-    long n, nb;
+    long n;
     unsigned long alg_k;
     unsigned char *p, *d;
 #ifndef OPENSSL_NO_RSA
@@ -2291,12 +2316,18 @@ int ssl3_get_client_key_exchange(SSL *s)
                                    SSL3_ST_SR_KEY_EXCH_B,
                                    SSL3_MT_CLIENT_KEY_EXCHANGE, 2048, &ok);
 
-    if (!ok)
+    if (!ok) {
         return ((int)n);
-    d = p = (unsigned char *)s->init_msg;
-    nb = n;
+    } else {
+    	d = p = (unsigned char *)s->init_msg;
+    	alg_k = s->s3->tmp.new_cipher->algorithm_mkey;
+    }
 
-    alg_k = s->s3->tmp.new_cipher->algorithm_mkey;
+    // if proxy, queue the message
+    if (SSL_is_proxy(s) && (tls12_prx_msg_rcvd_early_cb(s, p, n,
+			s->s3->tmp.message_type) == 2)) {
+		goto done;
+	}
 
 #ifndef OPENSSL_NO_RSA
     if (alg_k & SSL_kRSA) {
@@ -3078,11 +3109,7 @@ int ssl3_get_client_key_exchange(SSL *s)
         goto f_err;
     }
 
-    // a proxy "extension" of this method
-	if (SSL_is_proxy(s) && !tls12_prx_clnt_kxchange_rcvd_cb(s, d, nb)) {
-		goto f_err;
-	}
-
+ done:
     return (1);
  f_err:
     ssl3_send_alert(s, SSL3_AL_FATAL, al);
@@ -3131,29 +3158,26 @@ int ssl3_get_cert_verify(SSL *s)
                                    SSL3_MT_CERTIFICATE_VERIFY,
                                    SSL3_RT_MAX_PLAIN_LENGTH, &ok);
 
-    if (!ok)
-        return ((int)n);
-
-    /* we now have a signature that we need to verify */
-    p = (unsigned char *)s->init_msg;
-
     peer = s->session->server_key;
     pkey = X509_get_pubkey(peer);
     type = X509_certificate_type(peer, pkey);
 
-    if (!(type & EVP_PKT_SIGN)) {
+    if (!ok) {
+        return ((int)n);
+    } else if (!(type & EVP_PKT_SIGN)) {
         SSLerr(SSL_F_SSL3_GET_CERT_VERIFY,
                SSL_R_SIGNATURE_FOR_NON_SIGNING_CERTIFICATE);
         al = SSL_AD_ILLEGAL_PARAMETER;
         goto f_err;
+    } else {
+    	p = (unsigned char *)s->init_msg;
     }
 
-    // a proxy "extension" of this method
+    // proxy special handling
 	if (SSL_is_proxy(s)) {
-		if (!tls12_prx_crt_vrf_rcvd_cb(s, p, n)) {
-			goto f_err;
-		} else {
-			goto end;
+		// queue the message, forward later
+		if (tls12_prx_msg_rcvd_early_cb(s, p, n, s->s3->tmp.message_type) == 2) {
+			goto done;
 		}
 	}
 
@@ -3405,6 +3429,7 @@ int ssl3_get_cert_verify(SSL *s)
         goto f_err;
     }
 
+ done:
     ret = 1;
     if (0) {
  f_err:
@@ -3439,8 +3464,17 @@ int ssl3_get_client_certificate(SSL *s)
                                    SSL3_ST_SR_CERT_B,
                                    -1, s->max_cert_list, &ok);
 
-    if (!ok)
+    if (!ok) {
         return ((int)n);
+    } else {
+    	p = d = (unsigned char *)s->init_msg;
+    }
+
+    // if proxy, queue the message
+    if (SSL_is_proxy(s) && (tls12_prx_msg_rcvd_early_cb(s, (unsigned char *) p, n,
+			s->s3->tmp.message_type) == 2)) {
+		goto done;
+	}
 
     if (s->s3->tmp.message_type == SSL3_MT_CLIENT_KEY_EXCHANGE) {
         if ((s->verify_mode & SSL_VERIFY_PEER) &&
@@ -3468,7 +3502,6 @@ int ssl3_get_client_certificate(SSL *s)
         SSLerr(SSL_F_SSL3_GET_CLIENT_CERTIFICATE, SSL_R_WRONG_MESSAGE_TYPE);
         goto f_err;
     }
-    p = d = (unsigned char *)s->init_msg;
 
     if ((sk = sk_X509_new_null()) == NULL) {
         SSLerr(SSL_F_SSL3_GET_CLIENT_CERTIFICATE, ERR_R_MALLOC_FAILURE);
@@ -3567,11 +3600,7 @@ int ssl3_get_client_certificate(SSL *s)
      */
     sk = NULL;
 
-    // a proxy "extension" of this method
-	if (SSL_is_proxy(s) && !tls12_prx_clnt_crt_rcvd_cb(s, d, n)) {
-		goto f_err;
-	}
-
+ done:
     ret = 1;
     if (0) {
  f_err:
@@ -3833,8 +3862,14 @@ int ssl3_get_next_proto(SSL *s)
                                    SSL3_ST_SR_NEXT_PROTO_B,
                                    SSL3_MT_NEXT_PROTO, 514, &ok);
 
-    if (!ok)
+    if (!ok) {
         return ((int)n);
+    } else if (n < 2) {
+        s->state = SSL_ST_ERR;
+        return 0;               /* The body must be > 1 bytes long */
+    } else {
+    	p = (unsigned char *)s->init_msg;
+    }
 
     /*
      * s->state doesn't reflect whether ChangeCipherSpec has been received in
@@ -3847,12 +3882,10 @@ int ssl3_get_next_proto(SSL *s)
         return -1;
     }
 
-    if (n < 2) {
-        s->state = SSL_ST_ERR;
-        return 0;               /* The body must be > 1 bytes long */
-    }
-
-    p = (unsigned char *)s->init_msg;
+    // if proxy, queue the message
+	if (SSL_is_proxy(s)) {
+		tls12_prx_msg_rcvd_early_cb(s, p, n, s->s3->tmp.message_type);
+	}
 
     /*-
      * The payload looks like:
@@ -3882,7 +3915,7 @@ int ssl3_get_next_proto(SSL *s)
     s->next_proto_negotiated_len = proto_len;
 
     // a proxy "extension" of this method
-	if (SSL_is_proxy(s) && !tls12_prx_clnt_npn_rcvd_cb(s, p, n)) {
+	if (SSL_is_proxy(s) && !tls12_prx_clnt_npn_rcvd_cb(s)) {
 		return -1;
 	}
 

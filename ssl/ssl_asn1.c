@@ -145,6 +145,17 @@ int i2d_SSL_SESSION(SSL_SESSION *in, unsigned char **pp)
     if ((in == NULL) || ((in->cipher == NULL) && (in->cipher_id == 0)))
         return (0);
 
+	/*
+	 * TODO - edit this for proxy support. Weird that not even client certificate
+	 * is serialized by default...
+	 * in->end_cert; // server certificate
+	 * in->is_inspected;
+	 * in->mapped_sid;
+	 * in->peer_cert; // client certificate, if any
+	 * in->peer_key; // perhaps not necessary?
+	 * in->proxy_verify_result;
+	 */
+
     /*
      * Note that I cheat in the following 2 assignments.  I know that if the
      * ASN1_INTEGER passed to ASN1_INTEGER_set is > sizeof(long)+1, the
@@ -286,7 +297,6 @@ int i2d_SSL_SESSION(SSL_SESSION *in, unsigned char **pp)
         M_ASN1_I2D_len_EXP_opt(&(a.time), i2d_ASN1_INTEGER, 1, v1);
     if (in->timeout != 0L)
         M_ASN1_I2D_len_EXP_opt(&(a.timeout), i2d_ASN1_INTEGER, 2, v2);
-    // TODO: edit this to accomodate the new fields
     if (in->server_key != NULL)
         M_ASN1_I2D_len_EXP_opt(in->server_key, i2d_X509, 3, v3);
     M_ASN1_I2D_len_EXP_opt(&a.session_id_context, i2d_ASN1_OCTET_STRING, 4,
@@ -387,6 +397,17 @@ SSL_SESSION *d2i_SSL_SESSION(SSL_SESSION **a, const unsigned char **pp,
     ASN1_INTEGER ai, *aip;
     ASN1_OCTET_STRING os, *osp;
     M_ASN1_D2I_vars(a, SSL_SESSION *, SSL_SESSION_new);
+
+    /*
+	 * TODO - edit this for proxy support. Weird that not even client certificate
+	 * is serialized by default...
+	 * in->end_cert; // server certificate
+	 * in->is_inspected;
+	 * in->mapped_sid;
+	 * in->peer_cert; // client certificate, if any
+	 * in->peer_key; // perhaps not necessary?
+	 * in->proxy_verify_result;
+	 */
 
     aip = &ai;
     osp = &os;

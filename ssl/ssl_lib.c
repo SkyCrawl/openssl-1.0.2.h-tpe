@@ -190,7 +190,6 @@ SSL3_ENC_METHOD ssl3_undef_enc_method = {
 
 int SSL_clear(SSL *s)
 {
-
     if (s->method == NULL) {
         SSLerr(SSL_F_SSL_CLEAR, SSL_R_NO_METHOD_SPECIFIED);
         return (0);
@@ -225,7 +224,10 @@ int SSL_clear(SSL *s)
 
     s->type = 0;
 
-    s->state = SSL_ST_BEFORE | (SSL_is_server(s) ? SSL_ST_ACCEPT : SSL_ST_CONNECT);
+    // have to do this a bit round-about way because of proxy
+    int client = s->ctx->method->ssl_accept == ssl_undefined_function;
+    int init_state = client ? SSL_ST_CONNECT : SSL_ST_ACCEPT;
+    s->state = SSL_ST_BEFORE | init_state;
 
     s->version = s->method->version;
     s->client_version = s->version;
@@ -376,7 +378,7 @@ SSL *SSL_new(SSL_CTX *ctx)
     s->initial_ctx = ctx;
     s->verify_result = X509_V_OK;
     // initialize the TPE related fields
-    s->tpe_included = 0;
+    s->tpe_value = 0;
     s->proxy_verify_result = X509_V_OK;
     s->proxy_ocsp_resp = NULL;
     s->proxy_ocsp_resplen = -1;
@@ -664,6 +666,13 @@ void SSL_free(SSL *s)
 
     if (s->ctx)
         SSL_CTX_free(s->ctx);
+
+    if (SSL_is_proxy(s) && s->s3 && s->s3->tmp.dh) {
+    	DH_free(s->s3->tmp.dh);
+    }
+    if (SSL_is_proxy(s) && s->s3 && s->s3->tmp.ecdh) {
+    	EC_KEY_free(s->s3->tmp.ecdh);
+	}
 
 #ifndef OPENSSL_NO_KRB5
     if (s->kssl_ctx != NULL)
@@ -1634,42 +1643,45 @@ STACK_OF(SSL_CIPHER) *ssl_bytes_to_cipher_list(SSL *s, unsigned char *p,
 #ifndef OPENSSL_NO_RSA
 RSA* SSL_get_peer_RSA_tmp_pubkey(const SSL* s)
 {
-	return s->session->peer_cert->peer_rsa_tmp;
+	return SSL_get_peer_cert(s)->peer_rsa_tmp;
 }
 void SSL_set_peer_RSA_tmp_pubkey(const SSL* s, RSA* key)
 {
-	if(s->session->peer_cert->peer_rsa_tmp != NULL) {
-		RSA_free(s->session->peer_cert->peer_rsa_tmp);
+	SESS_CERT* sc = SSL_get_peer_cert(s);
+	if(sc && sc->peer_rsa_tmp != NULL) {
+		RSA_free(sc->peer_rsa_tmp);
 	}
-	s->session->peer_cert->peer_rsa_tmp = key;
+	sc->peer_rsa_tmp = key;
 }
 #endif
 
 #ifndef OPENSSL_NO_DH
 DH* SSL_get_peer_DHE_tmp_pubkey(const SSL* s)
 {
-	return s->session->peer_cert->peer_dh_tmp;
+	return SSL_get_peer_cert(s)->peer_dh_tmp;
 }
 void SSL_set_peer_DHE_tmp_pubkey(const SSL* s, DH* key)
 {
-	if(s->session->peer_cert->peer_dh_tmp != NULL) {
-		DH_free(s->session->peer_cert->peer_dh_tmp);
+	SESS_CERT* sc = SSL_get_peer_cert(s);
+	if(sc->peer_dh_tmp != NULL) {
+		DH_free(sc->peer_dh_tmp);
 	}
-	s->session->peer_cert->peer_dh_tmp = key;
+	sc->peer_dh_tmp = key;
 }
 #endif
 
 #ifndef OPENSSL_NO_ECDH
 EC_KEY* SSL_get_peer_ECDHE_tmp_pubkey(const SSL* s)
 {
-	return s->session->peer_cert->peer_ecdh_tmp;
+	return SSL_get_peer_cert(s)->peer_ecdh_tmp;
 }
 void SSL_set_peer_ECDHE_tmp_pubkey(const SSL* s, EC_KEY* key)
 {
-	if(s->session->peer_cert->peer_ecdh_tmp != NULL) {
-		EC_KEY_free(s->session->peer_cert->peer_ecdh_tmp);
+	SESS_CERT* sc = SSL_get_peer_cert(s);
+	if(sc->peer_ecdh_tmp != NULL) {
+		EC_KEY_free(sc->peer_ecdh_tmp);
 	}
-	s->session->peer_cert->peer_ecdh_tmp = key;
+	sc->peer_ecdh_tmp = key;
 }
 #endif
 
@@ -1895,7 +1907,7 @@ void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data,
 
 int SSL_was_tpe_included(const SSL *ssl)
 {
-	return ssl->tpe_included;
+	return ssl->tpe_value;
 }
 
 int SSL_is_session_inspected(const SSL *ssl)
@@ -3044,7 +3056,7 @@ SSL *SSL_dup(SSL *s)
     // duplicate the TPE related fields
 #ifndef OPENSSL_NO_TLSEXT
     // simply initialize & copy the code from 'SSL_new()'
-    ret->tpe_included = 0;
+    ret->tpe_value = 0;
     ret->proxy_verify_result = X509_V_OK;
     ret->proxy_ocsp_resp = NULL;
     ret->proxy_ocsp_resplen = -1;
@@ -3279,17 +3291,15 @@ const long SSL_get_weaker_from_hash_code(const long cryptoHashCode)
 	}
 }
 
-STACK_OF(SSL_CIPHER)* SSL_filter_DH_and_ECDH_kxchng(const STACK_OF(SSL_CIPHER)* source)
+void SSL_filter_DH_and_ECDH_kxchng(STACK_OF(SSL_CIPHER)* source)
 {
-	STACK_OF(SSL_CIPHER)* result = sk_SSL_CIPHER_dup(source);
-	for (int i = sk_SSL_CIPHER_num(result) - 1; i >= 0; i--) {
-		SSL_CIPHER* c = sk_SSL_CIPHER_value(result, i);
+	for (int i = sk_SSL_CIPHER_num(source) - 1; i >= 0; i--) {
+		SSL_CIPHER* c = sk_SSL_CIPHER_value(source, i);
 		if (c->algorithm_mkey & (SSL_kDHd | SSL_kDHr | SSL_kECDHe | SSL_kECDHr)) {
 			// evict implicit key exchange
-			sk_SSL_CIPHER_delete(result, i);
+			sk_SSL_CIPHER_delete(source, i);
 		}
 	}
-	return result;
 }
 
 #ifdef OPENSSL_NO_COMP

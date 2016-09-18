@@ -498,7 +498,8 @@ static int tls1_get_curvelist(SSL *s, int sess,
             } else
 # endif
             {
-                if (SSL_is_client(s) || s->cert->ecdh_tmp_auto) {
+            	int client = s->ctx->method == TLSv1_2_client_method();
+                if (client || s->cert->ecdh_tmp_auto) {
                     *pcurves = eccurves_auto;
                     pcurveslen = sizeof(eccurves_auto);
                 } else {
@@ -562,7 +563,8 @@ int tls1_shared_curve(SSL *s, int nmatch)
     size_t num_pref, num_supp, i, j;
     int k;
     /* Can't do anything on client side */
-    if (SSL_is_client(s))
+    int client = s->ctx->method == TLSv1_2_client_method();
+    if (client)
         return -1;
     if (nmatch == -2) {
         if (tls1_suiteb(s)) {
@@ -821,7 +823,8 @@ static int tls1_check_ec_key(SSL *s,
         if (i == num_curves)
             return 0;
         /* For clients can only check sent curve list */
-        if (SSL_is_client(s))
+        int client = s->ctx->method == TLSv1_2_client_method();
+        if (client)
             return 1;
     }
     return 1;
@@ -871,7 +874,8 @@ static int tls1_check_cert_param(SSL *s, X509 *x, int set_ee_md)
      * Can't check curve_id for client certs as we don't have a supported
      * curves extension.
      */
-    rv = tls1_check_ec_key(s, SSL_is_server(s) ? curve_id : NULL, &comp_id);
+    int server = s->ctx->method == TLSv1_2_server_method();
+    rv = tls1_check_ec_key(s, server ? curve_id : NULL, &comp_id);
     if (!rv)
         return 0;
     /*
@@ -1055,7 +1059,8 @@ size_t tls12_get_psigalgs(SSL *s, const unsigned char **psigs)
     }
 # endif
     /* If server use client authentication sigalgs if not NULL */
-    if (SSL_is_server(s) && s->cert->client_sigalgs) {
+    int server = s->ctx->method == TLSv1_2_server_method();
+    if (server && s->cert->client_sigalgs) {
         *psigs = s->cert->client_sigalgs;
         return s->cert->client_sigalgslen;
     } else if (s->cert->conf_sigalgs) {
@@ -1091,7 +1096,8 @@ int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s, SESS_CERT* sc,
         /* Check compression and curve matches extensions */
         if (!tls1_set_ec_id(curve_id, &comp_id, pkey->pkey.ec))
             return 0;
-        if (SSL_is_client(s) && !tls1_check_ec_key(s, curve_id, &comp_id)) {
+        int client = s->ctx->method == TLSv1_2_client_method();
+        if (client && !tls1_check_ec_key(s, curve_id, &comp_id)) {
             SSLerr(SSL_F_TLS12_CHECK_PEER_SIGALG, SSL_R_WRONG_CURVE);
             return 0;
         }
@@ -1780,9 +1786,12 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
      */
 # endif                         /* OPENSSL_NO_EC */
 
-    if (s->tlsext_ticket_expected && !(SSL_get_options(s) & SSL_OP_NO_TICKET)) {
-        if ((long)(limit - ret - 4) < 0)
+    // TODO: proxy doesn't support this for now
+    if (SSL_is_server(s) && s->tlsext_ticket_expected &&
+    		!(SSL_get_options(s) & SSL_OP_NO_TICKET)) {
+    	if ((long)(limit - ret - 4) < 0) {
             return NULL;
+    	}
         s2n(TLSEXT_TYPE_session_ticket, ret);
         s2n(0, ret);
     }
@@ -2415,6 +2424,7 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p,
                 !s->tls_session_ticket_ext_cb(s, data, size,
                                               s->tls_session_ticket_ext_cb_arg))
             {
+            	// TODO: this does not play well for proxy, forwarding and session resumption...
                 *al = TLS1_AD_INTERNAL_ERROR;
                 return 0;
             }
@@ -2949,10 +2959,10 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p,
 			}
 
 			/*
-			 * We still haven't checked compatibility with the chosen
-			 * cipher suite though.
+			 * We may not have checked compatibility with the chosen
+			 * cipher suite yet.
 			 */
-			if (!tls12_is_cipher_compatible_with_TPE(s)) {
+			if (!s->hit && !tls12_is_cipher_compatible_with_TPE(s)) {
 				*al = SSL_AD_ILLEGAL_PARAMETER;
 				return 0;
 			}
@@ -4022,7 +4032,8 @@ static int tls1_set_shared_sigalgs(SSL *s)
         c->shared_sigalgslen = 0;
     }
     /* If client use client signature algorithms if not NULL */
-    if (SSL_is_client(s) && c->client_sigalgs && !is_suiteb) {
+    int client = s->ctx->method == TLSv1_2_client_method();
+    if (client && c->client_sigalgs && !is_suiteb) {
         conf = c->client_sigalgs;
         conflen = c->client_sigalgslen;
     } else if (c->conf_sigalgs && !is_suiteb) {
@@ -4642,7 +4653,8 @@ int tls1_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain,
         rv |= CERT_PKEY_EE_PARAM;
     else if (!check_flags)
         goto end;
-    if (SSL_is_client(s))
+    int client = s->ctx->method == TLSv1_2_client_method();
+    if (client)
         rv |= CERT_PKEY_CA_PARAM;
     /* In strict mode check rest of chain too */
     else if (strict_mode) {
@@ -4658,7 +4670,7 @@ int tls1_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain,
             }
         }
     }
-    if (SSL_is_client(s) && strict_mode) {
+    if (client && strict_mode) {
         STACK_OF(X509_NAME) *ca_dn;
         int check_type = 0;
         switch (pk->type) {

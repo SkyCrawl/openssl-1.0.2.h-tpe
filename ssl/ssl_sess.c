@@ -145,7 +145,8 @@
 
 static void SSL_SESSION_list_remove(SSL_CTX *ctx, SSL_SESSION *s);
 static void SSL_SESSION_list_add(SSL_CTX *ctx, SSL_SESSION *s);
-static int remove_session_lock(SSL_CTX *ctx, SSL_SESSION *c, int lck);
+static int remove_session_lock(SSL_CTX *ctx, SSL_SESSION *c,
+		int lck, int free);
 
 SSL_SESSION *SSL_get_session(const SSL *ssl)
 /* aka SSL_get0_session; gets 0 objects, just returns a copy of the pointer */
@@ -198,6 +199,8 @@ SSL_SESSION *SSL_SESSION_new(void)
         SSLerr(SSL_F_SSL_SESSION_NEW, ERR_R_MALLOC_FAILURE);
         return (0);
     }
+
+    // Note: the 'SSL_SESSION_is_mapped()' uses this...
     memset(ss, 0, sizeof(SSL_SESSION));
 
     ss->verify_result = 1;      /* avoid 0 (= X509_V_OK) just in case */
@@ -414,7 +417,7 @@ static int def_generate_session_id(const SSL *ssl, unsigned char *id,
 
 int ssl_get_new_session(SSL *s, int session)
 {
-    /* This gets used by clients and servers. */
+    /* This gets used by clients, servers and proxies. */
 
     unsigned int tmp;
     SSL_SESSION *ss = NULL;
@@ -628,20 +631,23 @@ int ssl_get_prev_session(SSL *s, unsigned char *session_id, int len,
 
 #ifndef OPENSSL_NO_TLSEXT
     /* sets s->tlsext_ticket_expected */
-    r = tls1_process_ticket(s, session_id, len, limit, &ret);
-    switch (r) {
-    case -1:                   /* Error during processing */
-        fatal = 1;
-        goto err;
-    case 0:                    /* No ticket found */
-    case 1:                    /* Zero length ticket found */
-        break;                  /* Ok to carry on processing session id. */
-    case 2:                    /* Ticket found but not decrypted. */
-    case 3:                    /* Ticket decrypted, *ret has been set. */
-        try_session_cache = 0;
-        break;
-    default:
-        abort();
+    if (!SSL_is_proxy(s)) {
+    	// TODO: for now, proxy doesn't support/accept tickets
+    	r = tls1_process_ticket(s, session_id, len, limit, &ret);
+		switch (r) {
+		case -1:                   /* Error during processing */
+			fatal = 1;
+			goto err;
+		case 0:                    /* No ticket found */
+		case 1:                    /* Zero length ticket found */
+			break;                  /* Ok to carry on processing session id. */
+		case 2:                    /* Ticket found but not decrypted. */
+		case 3:                    /* Ticket decrypted, *ret has been set. */
+			try_session_cache = 0;
+			break;
+		default:
+			abort();
+		}
     }
 #endif
 
@@ -748,7 +754,7 @@ int ssl_get_prev_session(SSL *s, unsigned char *session_id, int len,
         s->session_ctx->stats.sess_timeout++;
         if (try_session_cache) {
             /* session was from the cache, so remove it */
-            SSL_CTX_remove_session(s->session_ctx, ret);
+            SSL_CTX_remove_session(s->session_ctx, ret, 1);
         }
         goto err;
     }
@@ -838,7 +844,7 @@ int SSL_CTX_add_session(SSL_CTX *ctx, SSL_SESSION *c)
         if (SSL_CTX_sess_get_cache_size(ctx) > 0) {
             while (SSL_CTX_sess_number(ctx) >
                    SSL_CTX_sess_get_cache_size(ctx)) {
-                if (!remove_session_lock(ctx, ctx->session_cache_tail, 0))
+                if (!remove_session_lock(ctx, ctx->session_cache_tail, 0, 1))
                     break;
                 else
                     ctx->stats.sess_cache_full++;
@@ -849,12 +855,12 @@ int SSL_CTX_add_session(SSL_CTX *ctx, SSL_SESSION *c)
     return (ret);
 }
 
-int SSL_CTX_remove_session(SSL_CTX *ctx, SSL_SESSION *c)
+int SSL_CTX_remove_session(SSL_CTX *ctx, SSL_SESSION *c, int free)
 {
-    return remove_session_lock(ctx, c, 1);
+    return remove_session_lock(ctx, c, 1, free);
 }
 
-static int remove_session_lock(SSL_CTX *ctx, SSL_SESSION *c, int lck)
+static int remove_session_lock(SSL_CTX *ctx, SSL_SESSION *c, int lck, int free)
 {
     SSL_SESSION *r;
     int ret = 0;
@@ -873,9 +879,12 @@ static int remove_session_lock(SSL_CTX *ctx, SSL_SESSION *c, int lck)
 
         if (ret) {
             r->not_resumable = 1;
-            if (ctx->remove_session_cb != NULL)
+            if (ctx->remove_session_cb != NULL) {
                 ctx->remove_session_cb(ctx, r);
-            SSL_SESSION_free(r);
+            }
+            if (free) {
+            	SSL_SESSION_free(r);
+            }
         }
     } else
         ret = 0;
@@ -1057,7 +1066,7 @@ int SSL_SESSION_set1_id_context(SSL_SESSION *s, const unsigned char *sid_ctx,
 #ifndef OPENSSL_NO_TLSEXT
 int SSL_SESSION_is_mapped(SSL_SESSION *s)
 {
-	unsigned long* l = &(s->mapped_sid[0]);
+	long* l = (long*) &(s->mapped_sid[0]);
     return (l[0] != 0) || (l[1] != 0) || (l[2] != 0) || (l[3] != 0);
 }
 #endif
@@ -1187,7 +1196,7 @@ int ssl_clear_bad_session(SSL *s)
     if ((s->session != NULL) &&
         !(s->shutdown & SSL_SENT_SHUTDOWN) &&
         !(SSL_in_init(s) || SSL_in_before(s))) {
-        SSL_CTX_remove_session(s->ctx, s->session);
+        SSL_CTX_remove_session(s->ctx, s->session, 1);
         return (1);
     } else
         return (0);

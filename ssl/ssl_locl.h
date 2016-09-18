@@ -1067,17 +1067,22 @@ int SSL_retrieve_session(SSL *s, unsigned char *session_id, int len,
 		const unsigned char *limit, SSL_SESSION** out);
 SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket);
 
+#ifndef OPENSSL_NO_TLSEXT
+int ssl3_check_finished(SSL *s);
+#endif
+
 /* some new methods for TPE */
 char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size);
 const long SSL_get_hash_code_from_cipher(const SSL_CIPHER* cipher);
 const EVP_MD *SSL_get_hash_from_code(const long cryptoHashCode);
 void SSL_get_hash_codes(const STACK_OF(SSL_CIPHER)* stack,
 		int* sha1, int* sha256, int* sha384);
+void SSL_filter_by_hash_codes(STACK_OF(SSL_CIPHER)* stack,
+		int sha1, int sha256, int sha384);
 const long SSL_get_hmac_NID_from_hash_code(const long cryptoHashCode);
 const long SSL_get_byte_strength_from_hash_code(const long cryptoHashCode);
 const long SSL_get_weaker_from_hash_code(const long cryptoHashCode);
-STACK_OF(SSL_CIPHER)* SSL_filter_DH_and_ECDH_kxchng(const
-		STACK_OF(SSL_CIPHER)* source);
+void SSL_filter_DH_and_ECDH_kxchng(STACK_OF(SSL_CIPHER)* source);
 RSA* SSL_get_peer_RSA_tmp_pubkey(const SSL* s);
 void SSL_set_peer_RSA_tmp_pubkey(const SSL* s, RSA* key);
 DH* SSL_get_peer_DHE_tmp_pubkey(const SSL* s);
@@ -1091,30 +1096,12 @@ int tls12_prx_accept(SSL *s);
 int tls12_prx_connect(SSL *s);
 int tls12_prx_clnt_get_tpe_value(SSL *s);
 int tls12_prx_srvr_get_tpe_value(SSL* s);
-int tls12_prx_clnt_hll_rcvd_cb(SSL* s, unsigned char* ext_data,
-		unsigned char* ext_data_limit);
-int tls12_prx_srvr_hll_rcvd_cb(SSL* s, unsigned char* ext_data,
-		unsigned char* ext_data_limit);
-int tls12_prx_srvr_crt_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len);
-int tls12_prx_srvr_kxchange_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len);
-int tls12_prx_crt_rqst_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len);
-int tls12_prx_srvr_tckt_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len);
-int tls12_prx_crt_status_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len);
-int tls12_prx_clnt_crt_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len);
-int tls12_prx_clnt_kxchange_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len);
-int tls12_prx_crt_vrf_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len);
-#ifndef OPENSSL_NO_NEXTPROTONEG
-int tls12_prx_clnt_npn_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len);
-#endif
+int tls12_prx_msg_rcvd_early_cb(const SSL* s, const unsigned char* msg,
+		const unsigned long msg_len, const int msg_type);
+int tls12_prx_clnt_hll_rcvd_cb(SSL* s);
+int tls12_prx_srvr_hll_rcvd_cb(SSL* s);
+int tls12_prx_srvr_crt_rcvd_cb(SSL* s);
+int tls12_prx_crt_rqst_rcvd_cb(SSL* s);
 /* this is where the new methods end */
 
 int ssl_cipher_id_cmp(const SSL_CIPHER *a, const SSL_CIPHER *b);

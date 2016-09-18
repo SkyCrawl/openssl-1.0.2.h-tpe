@@ -1379,6 +1379,8 @@ void SSL_CTX_set_alpn_select_cb(SSL_CTX *ctx,
                                            void *arg), void *arg);
 void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data,
                             unsigned *len);
+
+/* New methods for the TPE extension */
 int SSL_was_tpe_included(const SSL *ssl);
 int SSL_is_session_inspected(const SSL *ssl);
 
@@ -1697,6 +1699,7 @@ struct ssl_st {
     int proxy_ocsp_resplen;
     unsigned char* proxy_pubkey_tmp;
     int proxy_pubkey_tmp_len;
+    int prx_simply_forward;
 
 #   ifndef OPENSSL_NO_EC
     size_t tlsext_ecpointformatlist_length;
@@ -2344,7 +2347,7 @@ void SSL_SESSION_free(SSL_SESSION *ses);
 int i2d_SSL_SESSION(SSL_SESSION *in, unsigned char **pp);
 int SSL_set_session(SSL *to, SSL_SESSION *session);
 int SSL_CTX_add_session(SSL_CTX *s, SSL_SESSION *c);
-int SSL_CTX_remove_session(SSL_CTX *, SSL_SESSION *c);
+int SSL_CTX_remove_session(SSL_CTX *, SSL_SESSION *c, int free);
 int SSL_CTX_set_generate_session_id(SSL_CTX *, GEN_SESSION_CB);
 int SSL_set_generate_session_id(SSL *, GEN_SESSION_CB);
 int SSL_has_matching_session_id(const SSL *ssl, const unsigned char *id,

@@ -741,7 +741,8 @@ int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk, int cert_chain)
      * vice versa.
      */
 
-    X509_STORE_CTX_set_default(&ctx, SSL_is_server(s) ? "ssl_client" : "ssl_server");
+    int server = s->ctx->method == TLSv1_2_server_method();
+    X509_STORE_CTX_set_default(&ctx, server ? "ssl_client" : "ssl_server");
     /*
      * Anything non-default in "param" should overwrite anything in the ctx.
      */

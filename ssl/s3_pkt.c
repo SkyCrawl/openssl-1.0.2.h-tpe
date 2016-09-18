@@ -1343,8 +1343,11 @@ int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
      * (Possibly rr is 'empty' now, i.e. rr->length may be 0.)
      */
 
+    int server = s->ctx->method == TLSv1_2_server_method();
+    int client = s->ctx->method == TLSv1_2_client_method();
+
     /* If we are a client, check for an incoming 'Hello Request': */
-    if (SSL_is_client(s) &&
+    if (client &&
         (s->s3->handshake_fragment_len >= 4) &&
         (s->s3->handshake_fragment[0] == SSL3_MT_HELLO_REQUEST) &&
         (s->session != NULL) && (s->session->cipher != NULL)) {
@@ -1406,7 +1409,7 @@ int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
      * allowed send back a no renegotiation alert and carry on. WARNING:
      * experimental code, needs reviewing (steve)
      */
-    if (SSL_is_server(s) &&
+    if (server &&
         SSL_is_init_finished(s) &&
         !s->s3->send_connection_binding &&
         (s->version > SSL3_VERSION) &&
@@ -1473,7 +1476,7 @@ int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
             BIO_snprintf(tmp, sizeof tmp, "%d", alert_descr);
             ERR_add_error_data(2, "SSL alert number ", tmp);
             s->shutdown |= SSL_RECEIVED_SHUTDOWN;
-            SSL_CTX_remove_session(s->ctx, s->session);
+            SSL_CTX_remove_session(s->ctx, s->session, 1);
             return (0);
         } else {
             al = SSL_AD_ILLEGAL_PARAMETER;
@@ -1525,10 +1528,18 @@ int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
                             rr->data, 1, s, s->msg_callback_arg);
 
         s->s3->change_cipher_spec = 1;
-        if (!ssl3_do_change_cipher_spec(s))
+        /*
+         * TODO: this is wrong... the function MUST be called! For proxy forwarding,
+         * we have to implement our own reading interface that will just read and
+         * forward, disregarding the encryption and signatures. This is very low
+         * level... Record Layer Protocol.
+         */
+        int prx_frwrd = SSL_is_proxy(s) ? s->prx_simply_forward : 0;
+        if (!prx_frwrd && !ssl3_do_change_cipher_spec(s)) {
             goto err;
-        else
+        } else {
             goto start;
+        }
     }
 
     /*
@@ -1544,7 +1555,8 @@ int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
             s->state = SSL_ST_BEFORE | (s->server)
                 ? SSL_ST_ACCEPT : SSL_ST_CONNECT;
 #else
-            s->state = SSL_is_server(s) ? SSL_ST_ACCEPT : SSL_ST_CONNECT;
+            int server = s->ctx->method == TLSv1_2_server_method();
+            s->state = server ? SSL_ST_ACCEPT : SSL_ST_CONNECT;
 #endif
             s->renegotiate = 1;
             s->new_session = 1;
@@ -1642,10 +1654,11 @@ int ssl3_do_change_cipher_spec(SSL *s)
     const char *sender;
     int slen;
 
-    if (s->state & SSL_ST_ACCEPT)
+    if (s->state & SSL_ST_ACCEPT) {
         i = SSL3_CHANGE_CIPHER_SERVER_READ;
-    else
+    } else {
         i = SSL3_CHANGE_CIPHER_CLIENT_READ;
+    }
 
     if (s->s3->tmp.key_block == NULL) {
         if (s->session == NULL || s->session->master_key_length == 0) {
@@ -1656,64 +1669,79 @@ int ssl3_do_change_cipher_spec(SSL *s)
         }
 
         s->session->cipher = s->s3->tmp.new_cipher;
-        if (!s->method->ssl3_enc->setup_key_block(s))
+        if (!s->method->ssl3_enc->setup_key_block(s)) {
             return (0);
+        }
     }
 
-    if (!s->method->ssl3_enc->change_cipher_state(s, i))
+    if (!s->method->ssl3_enc->change_cipher_state(s, i)) {
         return (0);
+    }
 
     /*
      * we have to record the message digest at this point so we can get it
      * before we read the finished message
      */
+
     if (s->state & SSL_ST_CONNECT) {
-        sender = s->method->ssl3_enc->server_finished_label;
-        slen = s->method->ssl3_enc->server_finished_label_len;
-    } else {
-        sender = s->method->ssl3_enc->client_finished_label;
-        slen = s->method->ssl3_enc->client_finished_label_len;
-    }
+		sender = s->method->ssl3_enc->server_finished_label;
+		slen = s->method->ssl3_enc->server_finished_label_len;
+	} else {
+		sender = s->method->ssl3_enc->client_finished_label;
+		slen = s->method->ssl3_enc->client_finished_label_len;
+	}
 
-    i = s->method->ssl3_enc->final_finish_mac(s,
-                                              sender, slen,
-                                              s->s3->tmp.peer_finish_md);
-    if (i == 0) {
-        SSLerr(SSL_F_SSL3_DO_CHANGE_CIPHER_SPEC, ERR_R_INTERNAL_ERROR);
-        return 0;
-    }
-    s->s3->tmp.peer_finish_md_len = i;
-
+	i = s->method->ssl3_enc->final_finish_mac(s,
+			sender, slen, s->s3->tmp.peer_finish_md);
+	if (i == 0) {
+		SSLerr(SSL_F_SSL3_DO_CHANGE_CIPHER_SPEC, ERR_R_INTERNAL_ERROR);
+		return 0;
+	}
+	s->s3->tmp.peer_finish_md_len = i;
     return (1);
 }
 
 int ssl3_send_alert(SSL *s, int level, int desc)
 {
+	int ret = -1;
+
     /* Map tls/ssl alert value to correct one */
     desc = s->method->ssl3_enc->alert_value(desc);
     if (s->version == SSL3_VERSION && desc == SSL_AD_PROTOCOL_VERSION)
         desc = SSL_AD_HANDSHAKE_FAILURE; /* SSL 3.0 does not have
                                           * protocol_version alerts */
-    if (desc < 0)
-        return -1;
+    if (desc < 0) {
+    	goto done;
+    }
     /* If a fatal one, remove from cache */
-    if ((level == 2) && (s->session != NULL))
-        SSL_CTX_remove_session(s->ctx, s->session);
+    if ((level == 2) && (s->session != NULL)) {
+        SSL_CTX_remove_session(s->ctx, s->session, 1);
+    }
 
-    s->s3->alert_dispatch = 1;
     s->s3->send_alert[0] = level;
     s->s3->send_alert[1] = desc;
-    if (s->s3->wbuf.left == 0)  /* data still being written out? */
-        return s->method->ssl_dispatch_alert(s);
+    if (s->s3->wbuf.left == 0) {
+    	/* data still being written out? */
+    	ret = s->method->ssl_dispatch_alert(s);
+    }
+    s->s3->alert_dispatch = 1;
+
     /*
      * else data is still being written out, we will get written some time in
      * the future
      */
-    return -1;
+ done:
+    return ret;
 }
 
 int ssl3_dispatch_alert(SSL *s)
 {
+	// safety check: ignore multiple calls
+	if (s->s3->alert_dispatch) {
+		return 1;
+	}
+
+	// proceed with the normal execution
     int i, j;
     void (*cb) (const SSL *ssl, int type, int val) = NULL;
 
