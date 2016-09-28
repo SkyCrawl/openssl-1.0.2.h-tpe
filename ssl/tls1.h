@@ -254,8 +254,8 @@ extern "C" {
 /* ExtensionType value from RFC4507 */
 # define TLSEXT_TYPE_session_ticket              35
 
- /* New ExtensionType value for TPE */
- # define TLSEXT_TYPE_trustworthy_proxy			 36
+/* New ExtensionType value for TPE */
+# define TLSEXT_TYPE_trustworthy_proxy			 36
 
 /* ExtensionType value from draft-rescorla-tls-opaque-prf-input-00.txt */
 # if 0
@@ -348,6 +348,9 @@ int SSL_get_sigalgs(SSL *s, int idx,
 int SSL_get_shared_sigalgs(SSL *s, int idx,
                            int *psign, int *phash, int *psignandhash,
                            unsigned char *rsig, unsigned char *rhash);
+
+typedef struct stack_st_SSL_CIPHER* CIPHER_STACK;
+void tls12_print_cipher_stack(BIO *bio, CIPHER_STACK ciphers);
 
 int SSL_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain);
 

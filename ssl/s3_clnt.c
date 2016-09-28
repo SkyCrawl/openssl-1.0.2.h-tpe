@@ -360,20 +360,24 @@ int ssl3_connect(SSL *s)
                  new_cipher->algorithm_auth & (SSL_aNULL | SSL_aSRP))
                     && !(s->s3->tmp.new_cipher->algorithm_mkey & SSL_kPSK)) {
                 ret = ssl3_get_certificate(s, received_cert_msgs);
-                if (ret <= 0)
+                if (ret <= 0) {
                     goto end;
-                else
+                } else {
                 	received_cert_msgs++;
+                }
+
 #ifndef OPENSSL_NO_TLSEXT
-                if (s->tlsext_status_expected)
+                if (s->tlsext_status_expected) {
                     s->state = SSL3_ST_CR_CERT_STATUS_A;
-                else if(!s->session->is_inspected)
-                    s->state = SSL3_ST_CR_KEY_EXCH_A;
-                else {
+                } else if (SSL_is_session_inspected(s) && (received_cert_msgs == 1)) {
                 	/*
-                	 * Otherwise 1 more cert message is required and state
-                	 * persists.
+                	 * One more Certificate message is required and state
+                	 * persists. We only have to move back to the A state
+                	 * (from B state).
                 	 */
+                	s->state = SSL3_ST_CR_CERT_A;
+                } else {
+                	s->state = SSL3_ST_CR_KEY_EXCH_A;
                 }
             } else {
                 skip = 1;
@@ -598,8 +602,8 @@ int ssl3_connect(SSL *s)
                 goto end;
 
             // change state
-            if(s->session->is_inspected && (received_cert_msgs == 1)) {
-            	// 1 more cert message is required
+            if(SSL_is_session_inspected(s) && (received_cert_msgs == 1)) {
+            	// one more Certificate message is required
             	s->state = SSL3_ST_CR_CERT_A;
             }
             else {
@@ -894,8 +898,27 @@ int ssl3_send_client_hello(SSL *s)
 				SSL_filter_DH_and_ECDH_kxchng(cipher_stack);
 
 				// then, we have to adjust our cipher list according to the client
-				// Note: this method also filters any cipher with a non-<SHA1,SHA384> crypto hash
-				SSL_filter_by_hash_codes(cipher_stack, sha1, sha256, sha384);
+				// prefer SHA256 (SHA1 is not entirely safe today and SHA384 is too strong)
+				if (0) {
+				// if (sha256) {
+					STACK_OF(SSL_CIPHER)* bckp = sk_SSL_CIPHER_dup(cipher_stack);
+					SSL_filter_by_hash_codes(cipher_stack, 0, 1, 0);
+					if (sk_SSL_CIPHER_num(cipher_stack) == 0) {
+						// this should never happen... proxy doesn't support SHA256?
+						// anyway, restore the original list for now
+						sk_SSL_CIPHER_free(cipher_stack);
+						cipher_stack = bckp;
+
+						// and do the same again, this time without preference
+						goto no_pref;
+					} else {
+						sk_SSL_CIPHER_free(bckp);
+					}
+				} else {
+ no_pref:
+ 					// Note: this method also filters any cipher with a non-<SHA1,SHA384> crypto hash
+ 					SSL_filter_by_hash_codes(cipher_stack, sha1, sha256, sha384);
+				}
 
 				// and finally, save the list so we can use it when resuming session
 				s->session->ciphers = cipher_stack;
@@ -1755,21 +1778,14 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
 #ifndef OPENSSL_NO_RSA
     if (alg_k & SSL_kRSA) {
         /*
-         * Temporary RSA keys are only allowed in export ciphersuites but a proxy's
-         * RSA public key in the proxy-server session is required by the TPE extension
-         * if the server requests the client to authenticate. The
-         * 'ssl3_send_client_key_exchange' function indicates that these two cases
-    	 * are mutually exclusive.
+         * Temporary RSA keys are only allowed in export ciphersuites but
+         * the proxy's RSA public key for server is required by client
+         * when inspection is activated (TPE extension) and when the server
+         * demands client authentication. These two cases are mutually
+         * exclusive.
     	 */
 
-    	if (s->session->is_inspected) {
-    		// this is client-specific
-    		if (SSL_is_proxy(s)) {
-    			al = SSL_AD_INTERNAL_ERROR;
-    			SSLerr(SSL_F_SSL3_GET_KEY_EXCHANGE, SSL_R_TLSV1_ALERT_INTERNAL_ERROR);
-    			goto f_err;
-    		}
-
+    	if (SSL_is_client(s) && SSL_is_session_inspected(s)) {
     		// determine public key for authentication
 			if (alg_a & SSL_aRSA) {
 				pkey = X509_get_pubkey(
@@ -1802,10 +1818,10 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
 			}
 
 			/*
-			 * There is no need to check the length of RSA ciphertext as it should
-			 * be equal to the size of the modulus (see 'pkey'). The signature
-			 * verification algorithm should complain if it receives an unexpected
-			 * number of input bytes.
+			 * There is no need to check length of the RSA ciphertext as it should
+			 * be equal to the size of the modulus (see 'pkey') and the signature
+			 * verification algorithm below should complain if it receives an
+			 * unexpected number of input bytes.
 			 * Potentially, the lack of check may allow DoS attacks. However, there's
 			 * very little risk of such attacks against clients and this is definitely
 			 * not the only spot to secure in OpenSSL.
@@ -1974,7 +1990,8 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
         }
 
         // save the received raw public key if the session is inspected
-        if (s->session->is_inspected) {
+        if (SSL_is_client(s) && SSL_is_session_inspected(s)) {
+        	// we don't know whether client authentication
         	s->proxy_pubkey_tmp = BUF_memdup(p, i);
         	s->proxy_pubkey_tmp_len = i;
         }
@@ -2075,17 +2092,19 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
             goto f_err;
         }
 
-        // get the encoded ECPoint
-        p += 3;
+        // prepare the public key structure
         if (((srvr_ecpoint = EC_POINT_new(group)) == NULL) ||
             ((bn_ctx = BN_CTX_new()) == NULL)) {
             SSLerr(SSL_F_SSL3_GET_KEY_EXCHANGE, ERR_R_MALLOC_FAILURE);
             goto err;
         }
-        encoded_pt_len = *p;    // length of encoded point
+
+        // get length of the public key
+        p += 3;
+        encoded_pt_len = *p;
         p += 1;
 
-        // check i
+        // deserialize and check the public key
         if ((encoded_pt_len > n - param_len) ||
             (EC_POINT_oct2point(group, srvr_ecpoint,
                                 p, encoded_pt_len, bn_ctx) == 0)) {
@@ -2094,7 +2113,7 @@ int ssl3_get_key_exchange(SSL* s, SESS_CERT** sc)
         }
 
         // save the proxy's raw public key if the session is inspected
-		if (SSL_is_client(s) && s->session->is_inspected) {
+		if (SSL_is_client(s) && SSL_is_session_inspected(s)) {
 			s->proxy_pubkey_tmp = BUF_memdup(p, encoded_pt_len);
 			s->proxy_pubkey_tmp_len = encoded_pt_len;
 		}
@@ -2783,15 +2802,18 @@ int ssl3_send_client_key_exchange(SSL *s, SESS_CERT* sc)
         	// prepare the message and random bytes
         	unsigned char tmp_buf[SSL_MAX_MASTER_KEY_LENGTH];
         	if (SSL_is_proxy(s) && s->s3->tmp.cert_req) {
-        		// simply re-send the prepared key...
+        		// simply reuse the pre-generated key...
+        		s2n(s->proxy_pubkey_tmp_len, p);
         		memcpy(p, s->proxy_pubkey_tmp, s->proxy_pubkey_tmp_len);
-        		n = s->proxy_pubkey_tmp_len;
-        		s->proxy_pubkey_tmp_len = 0;
-        		s->proxy_pubkey_tmp = NULL; // freed in the other connection
+        		n = s->proxy_pubkey_tmp_len + 2;
 
         		// copy the hidden random bytes and cleanse source immediately
         		memcpy(&(tmp_buf[0]), &(s->session->master_key[0]), sizeof(tmp_buf));
         		OPENSSL_cleanse(s->session->master_key, sizeof(tmp_buf));
+
+        		// reset the temporary storage (freed in the other connection)
+        		s->proxy_pubkey_tmp_len = 0;
+        		s->proxy_pubkey_tmp = NULL;
         	} else {
 				// basic check
 				if (sc == NULL) {
@@ -3012,7 +3034,7 @@ int ssl3_send_client_key_exchange(SSL *s, SESS_CERT* sc)
             DH *dh_clnt;
             if (SSL_is_proxy(s) && s->s3->tmp.cert_req) {
             	// actually freed elsewhere
-            	// note: we assume that proxy has mirrored params among sessions
+            	// Note: we assume that proxy has mirrored params among sessions
             	dh_clnt = s->s3->tmp.dh;
             	s->s3->tmp.dh = NULL;
             } else if (s->s3->flags & TLS1_FLAGS_SKIP_CERT_VERIFY) {
@@ -3507,8 +3529,8 @@ int ssl3_send_client_verify(SSL *s)
     // compute the signed artifact if the session is inspected (TPE extension)
 	long hdatalen = 0;
 	void* hdata = NULL;
-	if(s->session->is_inspected) {
-		hdata = (void*) TLS12_TPE_get_signed_artifact(s, &hdatalen);
+	if(SSL_is_session_inspected(s)) {
+		hdata = (void*) tls12_tpe_get_signed_artifact(s, &hdatalen);
 		if(hdata == NULL) {
 			SSLerr(SSL_F_SSL3_SEND_CLIENT_VERIFY, ERR_R_INTERNAL_ERROR);
 			goto err;
@@ -3531,7 +3553,7 @@ int ssl3_send_client_verify(SSL *s)
         }
         if (EVP_PKEY_CTX_set_signature_md(pctx, EVP_sha1()) <= 0) {
         	ERR_clear_error();
-        } else if (!SSL_USE_SIGALGS(s) && !s->session->is_inspected) {
+        } else if (!SSL_USE_SIGALGS(s) && !SSL_is_session_inspected(s)) {
         	// this probably computes SHA1 hash of the handshake...
         	s->method->ssl3_enc->cert_verify_mac(s, NID_sha1,
         			&(data[MD5_DIGEST_LENGTH]));
@@ -3552,7 +3574,7 @@ int ssl3_send_client_verify(SSL *s)
         	// get the content to sign and its length (local handling only)
         	// Note: special buffer because now we potentially use a different hash
         	const EVP_MD* digest_alg = s->cert->key->digest;
-			if(!s->session->is_inspected) {
+			if(!SSL_is_session_inspected(s)) {
 				hdatalen = BIO_get_mem_data(s->s3->handshake_buffer, &hdata);
 				if(hdatalen <= 0) {
 					SSLerr(SSL_F_SSL3_SEND_CLIENT_VERIFY, ERR_R_INTERNAL_ERROR);
@@ -3607,7 +3629,7 @@ int ssl3_send_client_verify(SSL *s)
 
             // do sign
             int ret;
-            if(!s->session->is_inspected) {
+            if(!SSL_is_session_inspected(s)) {
             	// this should really not be valid nowadays...
             	s->method->ssl3_enc->cert_verify_mac(s, NID_md5, &(data[0]));
 
@@ -3737,7 +3759,7 @@ int ssl3_send_client_verify(SSL *s)
 
         	// we have to hash the artifact first if session is inspected
         	unsigned int digest_size = SHA_DIGEST_LENGTH;
-        	if(s->session->is_inspected && !EVP_Digest(hdata, hdatalen,
+        	if(SSL_is_session_inspected(s) && !EVP_Digest(hdata, hdatalen,
         			&(data[MD5_DIGEST_LENGTH]), &digest_size, EVP_sha1(), NULL)) {
         		// could not compute the hash for some reason...
         		SSLerr(SSL_F_SSL3_SEND_CLIENT_VERIFY, ERR_R_CRYPTO_LIB);
@@ -3781,7 +3803,7 @@ int ssl3_send_client_verify(SSL *s)
 
         	// we have to hash the artifact first if session is inspected
         	unsigned int digest_size = SHA_DIGEST_LENGTH;
-			if(s->session->is_inspected && !EVP_Digest(hdata, hdatalen,
+			if(SSL_is_session_inspected(s) && !EVP_Digest(hdata, hdatalen,
 					&(data[MD5_DIGEST_LENGTH]), &digest_size, EVP_sha1(), NULL)) {
 				// could not compute the hash for some reason...
 				SSLerr(SSL_F_SSL3_SEND_CLIENT_VERIFY, ERR_R_CRYPTO_LIB);
@@ -3823,14 +3845,14 @@ int ssl3_send_client_verify(SSL *s)
         ssl_set_handshake_header(s, SSL3_MT_CERTIFICATE_VERIFY, n);
         s->state = SSL3_ST_CW_CERT_VRFY_B;
     }
-    if(s->session->is_inspected && (hdata != NULL)) {
+    if(SSL_is_session_inspected(s) && (hdata != NULL)) {
     	OPENSSL_free(hdata);
     }
     EVP_MD_CTX_cleanup(&mctx);
     EVP_PKEY_CTX_free(pctx);
     return ssl_do_write(s);
  err:
- 	if(s->session->is_inspected && (hdata != NULL)) {
+ 	if(SSL_is_session_inspected(s) && (hdata != NULL)) {
  		OPENSSL_free(hdata);
     }
     EVP_MD_CTX_cleanup(&mctx);

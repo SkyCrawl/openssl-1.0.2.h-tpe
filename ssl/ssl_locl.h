@@ -1072,7 +1072,7 @@ int ssl3_check_finished(SSL *s);
 #endif
 
 /* some new methods for TPE */
-char* TLS12_TPE_get_signed_artifact(SSL* s, long* out_size);
+char* tls12_tpe_get_signed_artifact(SSL* s, long* out_size);
 const long SSL_get_hash_code_from_cipher(const SSL_CIPHER* cipher);
 const EVP_MD *SSL_get_hash_from_code(const long cryptoHashCode);
 void SSL_get_hash_codes(const STACK_OF(SSL_CIPHER)* stack,
@@ -1083,6 +1083,8 @@ const long SSL_get_hmac_NID_from_hash_code(const long cryptoHashCode);
 const long SSL_get_byte_strength_from_hash_code(const long cryptoHashCode);
 const long SSL_get_weaker_from_hash_code(const long cryptoHashCode);
 void SSL_filter_DH_and_ECDH_kxchng(STACK_OF(SSL_CIPHER)* source);
+STACK_OF(SSL_CIPHER)* SSL_extract_by_kxchng(STACK_OF(SSL_CIPHER)* source,
+		const int alg_k);
 RSA* SSL_get_peer_RSA_tmp_pubkey(const SSL* s);
 void SSL_set_peer_RSA_tmp_pubkey(const SSL* s, RSA* key);
 DH* SSL_get_peer_DHE_tmp_pubkey(const SSL* s);
@@ -1102,6 +1104,7 @@ int tls12_prx_clnt_hll_rcvd_cb(SSL* s);
 int tls12_prx_srvr_hll_rcvd_cb(SSL* s);
 int tls12_prx_srvr_crt_rcvd_cb(SSL* s);
 int tls12_prx_crt_rqst_rcvd_cb(SSL* s);
+int tls12_prx_clnt_crt_rcvd_cb(SSL* s);
 /* this is where the new methods end */
 
 int ssl_cipher_id_cmp(const SSL_CIPHER *a, const SSL_CIPHER *b);

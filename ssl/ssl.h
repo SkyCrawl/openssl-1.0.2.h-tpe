@@ -2251,6 +2251,7 @@ int SSL_get_fd(const SSL *s);
 int SSL_get_rfd(const SSL *s);
 int SSL_get_wfd(const SSL *s);
 const char *SSL_get_cipher_list(const SSL *s, int n);
+STACK_OF(SSL_CIPHER)* SSL_get_session_ciphers(const SSL *s);
 char *SSL_get_shared_ciphers(const SSL *s, char *buf, int len);
 int SSL_get_read_ahead(const SSL *s);
 int SSL_pending(const SSL *s);
@@ -2330,6 +2331,7 @@ int SSL_SESSION_set1_id_context(SSL_SESSION *s, const unsigned char *sid_ctx,
                                 unsigned int sid_ctx_len);
 
 #ifndef OPENSSL_NO_TLSEXT
+int SSL_is_sid_set(unsigned char* sid);
 int SSL_SESSION_is_mapped(SSL_SESSION *s);
 #endif
 
@@ -2357,9 +2359,11 @@ SSL_SESSION *d2i_SSL_SESSION(SSL_SESSION **a, const unsigned char **pp,
 
 # ifdef HEADER_X509_H
 X509 *SSL_get_peer_x509(const SSL *s);
+X509 *SSL_get_srvr_x509(const SSL *s);
 # endif
 
 STACK_OF(X509) *SSL_get_peer_cert_chain(const SSL *s);
+STACK_OF(X509) *SSL_get_srvr_cert_chain(const SSL *s);
 
 int SSL_CTX_get_verify_mode(const SSL_CTX *ctx);
 int SSL_CTX_get_verify_depth(const SSL_CTX *ctx);

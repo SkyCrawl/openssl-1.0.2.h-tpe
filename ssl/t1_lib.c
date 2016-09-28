@@ -1604,7 +1604,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
 			 * the session's inspection status on every new connection
 			 * bound to that session.
 			 */
-			do_send_tpe = s->session->is_inspected;
+			do_send_tpe = SSL_is_session_inspected(s);
 		}
 
     	// all conditions have been asserted, now on to the actual value
@@ -1643,7 +1643,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
 
 			/*
 			 * If we're a proxy, this is the time to set inspected status.
-			 * Incidentally, 'if(s->session->is_inspected)' will be equivalent
+			 * Incidentally, 'if(SSL_is_session_inspected(s))' will be equivalent
 			 * to asking:
 			 * - Have we applied public mode?
 			 */
@@ -3014,7 +3014,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p,
     if (s->tpe_value && !tpe_seen) {
     	if (s->hit) {
     		// we're resuming a session
-    		if (s->session->is_inspected) {
+    		if (SSL_is_session_inspected(s)) {
     			/*
     			 * Session is inspected and therefore, connection must be
     			 * inspected.
@@ -3389,7 +3389,7 @@ int ssl_check_clienthello_tlsext_late(SSL *s)
 				 * inspection status on every new connection bound to
 				 * that session.
 				 */
-				if (peer_proxy != s->session->is_inspected) {
+				if (peer_proxy != SSL_is_session_inspected(s)) {
 					/*
 					 * 1) A proxy is trying to resume a non-inspected
 					 * session with us and make the new connection
@@ -4205,6 +4205,36 @@ int SSL_get_shared_sigalgs(SSL *s, int idx,
     if (rhash)
         *rhash = shsigalgs->rhash;
     return s->cert->shared_sigalgslen;
+}
+
+void tls12_print_ciphers_oneline(BIO *bio, struct stack_st_SSL_CIPHER* ciphers,
+		const char* alg_label, const long alg_k)
+{
+	STACK_OF(SSL_CIPHER) *ciphers_by_alg = SSL_extract_by_kxchng(ciphers, alg_k);
+	if (ciphers_by_alg != NULL) {
+		int n = sk_SSL_CIPHER_num(ciphers_by_alg);
+		if (n > 0) {
+			BIO_printf(bio, "%s: ", alg_label);
+			for (int i = 0; i < n; i++) {
+
+				SSL_CIPHER *c = sk_SSL_CIPHER_value(ciphers_by_alg, i);
+				BIO_printf(bio, "%s", c->name);
+				if (i < n - 1) {
+					BIO_puts(bio, ", ");
+				}
+			}
+			BIO_puts(bio, "\n");
+		}
+	}
+}
+
+void tls12_print_cipher_stack(BIO *bio, CIPHER_STACK ciphers)
+{
+	tls12_print_ciphers_oneline(bio, ciphers, "RSA", SSL_kRSA);
+	tls12_print_ciphers_oneline(bio, ciphers, "DH", SSL_kDHd | SSL_kDHr);
+	tls12_print_ciphers_oneline(bio, ciphers, "DHE", SSL_kDHE);
+	tls12_print_ciphers_oneline(bio, ciphers, "ECDH", SSL_kECDHe | SSL_kECDHr);
+	tls12_print_ciphers_oneline(bio, ciphers, "ECDHE", SSL_kECDHE);
 }
 
 # ifndef OPENSSL_NO_HEARTBEATS

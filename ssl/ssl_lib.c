@@ -905,18 +905,42 @@ int SSL_pending(const SSL *s)
     return (s->method->ssl_pending(s));
 }
 
+X509* SSL_get_srvr_x509(const SSL *s)
+{
+    if ((s == NULL) || (s->session == NULL)) {
+        return NULL;
+    }
+    else {
+    	X509 *r = s->session->server_key;
+    	if(r != NULL) {
+    		CRYPTO_add(&r->references, 1, CRYPTO_LOCK_X509);
+    	}
+    	return (r);
+    }
+}
+
 X509* SSL_get_peer_x509(const SSL *s)
 {
     if ((s == NULL) || (s->session == NULL)) {
         return NULL;
     }
     else {
-    	X509 *r = s->session->is_inspected ? s->session->peer_key :
+    	X509 *r = SSL_is_session_inspected(s) ? s->session->peer_key :
         		s->session->server_key;
     	if(r != NULL) {
     		CRYPTO_add(&r->references, 1, CRYPTO_LOCK_X509);
     	}
     	return (r);
+    }
+}
+
+SESS_CERT* SSL_get_srvr_cert(const SSL *s)
+{
+    if ((s == NULL) || (s->session == NULL)) {
+        return NULL;
+    }
+    else {
+        return s->session->end_cert;
     }
 }
 
@@ -928,6 +952,21 @@ SESS_CERT* SSL_get_peer_cert(const SSL *s)
     else {
         return s->session->peer_cert == NULL ? s->session->end_cert :
         		s->session->peer_cert;
+    }
+}
+
+STACK_OF(X509)* SSL_get_srvr_cert_chain(const SSL *s)
+{
+	/*
+	 * If we are a client, cert_chain includes the peer's own certificate; if
+	 * we are a server, it does not.
+	 */
+
+	SESS_CERT* sc = SSL_get_srvr_cert(s);
+    if(sc == NULL) {
+    	return NULL;
+    } else {
+    	return sc->cert_chain;
     }
 }
 
@@ -1443,22 +1482,26 @@ int SSL_set_cipher_list(SSL *s, const char *str)
 }
 
 /* works well for SSLv2, not so good for SSLv3 */
+STACK_OF(SSL_CIPHER)* SSL_get_session_ciphers(const SSL *s)
+{
+    if ((s->session == NULL) || (s->session->ciphers == NULL)) {
+        return (NULL);
+    } else {
+    	return s->session->ciphers;
+    }
+}
+
+/* works well for SSLv2, not so good for SSLv3 */
 char *SSL_get_shared_ciphers(const SSL *s, char *buf, int len)
 {
-    char *p;
-    STACK_OF(SSL_CIPHER) *sk;
+    STACK_OF(SSL_CIPHER) *sk = SSL_get_session_ciphers(s);
+    if ((sk == NULL) || (sk_SSL_CIPHER_num(sk) == 0) || (len < 2)) {
+        return (NULL);
+    }
+
     SSL_CIPHER *c;
     int i;
-
-    if ((s->session == NULL) || (s->session->ciphers == NULL) || (len < 2))
-        return (NULL);
-
-    p = buf;
-    sk = s->session->ciphers;
-
-    if (sk_SSL_CIPHER_num(sk) == 0)
-        return NULL;
-
+    char *p = buf;
     for (i = 0; i < sk_SSL_CIPHER_num(sk); i++) {
         int n;
 
@@ -1905,14 +1948,14 @@ void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data,
         *len = ssl->s3->alpn_selected_len;
 }
 
-int SSL_was_tpe_included(const SSL *ssl)
+int SSL_was_tpe_included(const SSL *s)
 {
-	return ssl->tpe_value;
+	return s->tpe_value;
 }
 
-int SSL_is_session_inspected(const SSL *ssl)
+int SSL_is_session_inspected(const SSL *s)
 {
-	return ssl->session->is_inspected;
+	return s->session->is_inspected;
 }
 
 #endif                          /* !OPENSSL_NO_TLSEXT */
@@ -3302,6 +3345,19 @@ void SSL_filter_DH_and_ECDH_kxchng(STACK_OF(SSL_CIPHER)* source)
 	}
 }
 
+STACK_OF(SSL_CIPHER)* SSL_extract_by_kxchng(STACK_OF(SSL_CIPHER)* source,
+		const int alg_k)
+{
+	STACK_OF(SSL_CIPHER)* result = sk_SSL_CIPHER_new_null();
+	for (int i = 0; i < sk_SSL_CIPHER_num(source); i++) {
+		SSL_CIPHER* c = sk_SSL_CIPHER_value(source, i);
+		if (c->algorithm_mkey & alg_k) {
+			sk_SSL_CIPHER_push(result, c);
+		}
+	}
+	return result;
+}
+
 #ifdef OPENSSL_NO_COMP
 const void *SSL_get_current_compression(SSL *s)
 {
@@ -3495,10 +3551,10 @@ void SSL_set_info_callback(SSL *ssl,
  * One compiler (Diab DCC) doesn't like argument names in returned function
  * pointer.
  */
-void (*SSL_get_info_callback(const SSL *ssl)) (const SSL * /* ssl */ ,
+void (*SSL_get_info_callback(const SSL *s)) (const SSL * /* ssl */ ,
                                                int /* type */ ,
                                                int /* val */ ) {
-    return ssl->info_callback;
+    return s->info_callback;
 }
 
 int SSL_state(const SSL *ssl)

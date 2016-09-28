@@ -583,7 +583,7 @@ int ssl_get_new_session(SSL *s, int session)
     memcpy(ss->sid_ctx, s->sid_ctx, s->sid_ctx_length);
     ss->sid_ctx_length = s->sid_ctx_length;
     s->session = ss;
-    ss->ssl_version = s->version;
+    ss->ssl_version = s->client_version;
     ss->verify_result = X509_V_OK;
 
     return (1);
@@ -1064,10 +1064,14 @@ int SSL_SESSION_set1_id_context(SSL_SESSION *s, const unsigned char *sid_ctx,
 }
 
 #ifndef OPENSSL_NO_TLSEXT
+int SSL_is_sid_set(unsigned char* sid)
+{
+	long* l = (long*) sid;
+    return (l[0] != 0) || (l[1] != 0) || (l[2] != 0) || (l[3] != 0);
+}
 int SSL_SESSION_is_mapped(SSL_SESSION *s)
 {
-	long* l = (long*) &(s->mapped_sid[0]);
-    return (l[0] != 0) || (l[1] != 0) || (l[2] != 0) || (l[3] != 0);
+	return SSL_is_sid_set(&(s->mapped_sid[0]));
 }
 #endif
 

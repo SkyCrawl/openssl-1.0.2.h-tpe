@@ -1537,7 +1537,10 @@ int MAIN(int argc, char *argv[])
             alpn_in = *(++argv);
         }
         else if (strcmp(*argv, "-tpe") == 0) {
-            tpe_support = TLSEXT_TPESUPPORT_ENABLED;
+        	// don't override "-tpe_not_client_auth"
+        	if (tpe_support == 0) {
+        		tpe_support = TLSEXT_TPESUPPORT_ENABLED;
+        	}
         }
         else if (strcmp(*argv, "-tpe_not_client_auth") == 0) {
 			tpe_support = TLSEXT_TPESUPPORT_NOT_CLIENT_AUTH;

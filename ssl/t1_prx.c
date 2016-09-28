@@ -530,7 +530,14 @@ int tls12_prx_msg_rcvd_early_cb(const SSL* s, const unsigned char* msg,
 	MSG_QUEUE* target_queue = s == conn_prx_is_server ? &pq_prx_is_client :
 			&pq_prx_is_server;
 	msg_queue_push(target_queue, msg, msg_len, msg_type);
-	return tls12_prx_only_forward_comm() ? 2 : 1;
+
+	// and return
+	int only_forward = tls12_prx_only_forward_comm();
+	if (!only_forward && (s == conn_prx_is_server)) {
+		only_forward |= (msg_type == SSL3_MT_CERTIFICATE) ||
+				(msg_type == SSL3_MT_CERTIFICATE_VERIFY);
+	}
+	return only_forward ? 2 : 1;
 }
 
 /*
@@ -552,7 +559,7 @@ int tls12_prx_srvr_get_tpe_value(SSL* s)
 	 * Note: 'tls12_prx_srvr_hll_rcvd_cb()' guarantees that either
 	 * both sessions are being resumed or none.
 	 */
-	if (s->hit && (s->session->is_inspected != will_inspect)) {
+	if (s->hit && (SSL_is_session_inspected(s) != will_inspect)) {
 		/*
 		 * So far, we have successfully negotiated session resumption
 		 * with both endpoints but application decisions do not comply
@@ -609,15 +616,18 @@ int tls12_prx_srvr_get_tpe_value(SSL* s)
 		/*
 		 * Nothing but bad choices and bad luck. Proxy should try to
 		 * minimize the chance for this event. Depending on the situation
-		 * that got us here, there are three ways to react:
+		 * that got us here, there are two ways to react:
 		 * 1) Halt client connection and redo server connection, this
 		 * time with correct choices.
-		 * 2) Send HelloRequest to client and redo server connection.
-		 * 3) Abort both connections.
+		 * 2) Abort both connections.
 		 *
-		 * Normally, the first two options would do nicely. But because
-		 * of implementation difficulty, we're forced to stick with the
-		 * last option. However, it doesn't really matter as this
+		 * Note: client will ignore HelloRequest when in the midst
+		 * of a handshake (dictated by standard) so we can not use
+		 * the message.
+		 *
+		 * Normally, the first option would do nicely but because
+		 * of implementation difficulty, we're forced to stick with
+		 * the second option. However, it doesn't really matter as this
 		 * conditional branch is not reachable in the demo.
 		 * TODO: Unimplemented thus far because of difficulty. For now,
 		 * just terminate both connections.
@@ -892,7 +902,7 @@ int tls12_prx_do_handshake()
 			// if so, shut the other
 			SSL* which = is_conn_prx_is_clnt_shut ? conn_prx_is_server :
 					conn_prx_is_client;
-			tls12_prx_terminate_one(which, SSL_AD_INTERNAL_ERROR);
+			ret = tls12_prx_terminate_one(which, SSL_AD_INTERNAL_ERROR);
 		}
 	}
 
@@ -1278,7 +1288,7 @@ int do_connect(SSL* s, int (*stop)(SSL*, int))
 				 * can delay as long as he wishes.
 				 */
 			} else {
-				s->s3->tmp.next_state = s->tlsext_ticket_expected ?
+				s->state = s->tlsext_ticket_expected ?
 						SSL3_ST_CR_SESSION_TICKET_A : SSL3_ST_CR_FINISHED_A;
 			}
 			s->init_num = 0;
@@ -1785,9 +1795,11 @@ int do_accept(SSL* s, int (*stop)(SSL*, int))
 		case SSL3_ST_SR_CERT_VRFY_A:
 		case SSL3_ST_SR_CERT_VRFY_B:
 			// received message will be queued via a callback
-			ret = ssl3_get_cert_verify(s);
-			if (ret <= 0) {
-				goto err_or_done;
+			if (s->s3->tmp.cert_request) {
+				ret = ssl3_get_cert_verify(s);
+				if (ret <= 0) {
+					goto err_or_done;
+				}
 			}
 
 			// finish up
@@ -1939,7 +1951,7 @@ int do_accept(SSL* s, int (*stop)(SSL*, int))
 				s->state = SSL3_ST_SR_FINISHED_A;
 #endif
 			} else {
-				s->s3->tmp.next_state = SSL_ST_OK;
+				s->state = SSL_ST_OK;
 			}
 			s->init_num = 0;
 
@@ -2068,7 +2080,7 @@ int tls12_prx_restore_srvr_session()
 		 * targets a session that was not inspected before) or there's
 		 * something fishy going on...
 		 */
-		if (conn_prx_is_server->session->is_inspected) {
+		if (SSL_is_session_inspected(conn_prx_is_server)) {
 			// early decision was not wrong after all...
 			tls12_prx_terminate_both(SSL_AD_INTERNAL_ERROR, SSL_AD_INTERNAL_ERROR);
 			return -1;
@@ -2107,12 +2119,12 @@ int tls12_prx_restore_srvr_session()
 		int session_missing = ret == 0;
 
 		// whether the session's and connection's versions match
-		int version_check = conn_prx_is_client->version ==
-				conn_prx_is_client->session->ssl_version;
+		int version_check = conn_prx_is_client->session->ssl_version ==
+				conn_prx_is_server->client_version;
 
 		// whether the previous session is not compatible with the early inspection decision
 		int bad_decision = !tls12_prx_only_forward_comm() &&
-				!conn_prx_is_server->session->is_inspected;
+				!SSL_is_session_inspected(conn_prx_is_server);
 
 		// now use these factors
 		if (session_missing || !version_check || bad_decision) {
@@ -2160,7 +2172,7 @@ int tls12_prx_clnt_hll_rcvd_cb(SSL* s)
 		 */
 		tls12_prx_terminate_both(SSL_AD_HANDSHAKE_FAILURE, SSL_AD_INTERNAL_ERROR);
 		return 0;
-	} else if (forward && s->hit && s->session->is_inspected) {
+	} else if (forward && s->hit && SSL_is_session_inspected(s)) {
 		/*
 		 * We decided to forward the client's request and let him try to
 		 * resume OUR session with the server. Technically speaking, this
@@ -2244,10 +2256,12 @@ int tls12_prx_clnt_hll_rcvd_cb(SSL* s)
 
 	if (!s->hit) {
 		// proxy will mirror the client's protocol version
+		conn_prx_is_client->version = s->version;
 		conn_prx_is_client->client_version = s->client_version;
 
-		// this shouldn't be needed but who knows...
-		conn_prx_is_client->version = s->client_version;
+		// this shouldn't be really needed but who knows...
+		conn_prx_is_server->session->ssl_version = s->client_version;
+		conn_prx_is_client->session->ssl_version = s->client_version;
 
 		// filter client's cipher suites (only in inspection mode)
 		if (!forward) {
@@ -2292,10 +2306,10 @@ int tls12_prx_clnt_hll_rcvd_cb(SSL* s)
 		conn_prx_is_client->servername_done = s->servername_done;
 	}
 
-	// TODO: signature algorithms
-	// tls1_set_server_sigalgs(s)
+	// TODO - signature algorithms extension:
+	// tls1_set_server_sigalgs(s);
 
-	// TODO: 's->cert'
+	// TODO - 's->cert':
 	// 1) status extension
 	// 2) ALPN extension
 
@@ -2380,41 +2394,51 @@ int tls12_prx_srvr_hll_rcvd_cb(SSL* s)
 		}
 	}
 
-	// okay, now either both sessions should be mapped or none of them
-	int clnt_sess_mapped = SSL_SESSION_is_mapped(conn_prx_is_server->session);
-	int srvr_sess_mapped = SSL_SESSION_is_mapped(conn_prx_is_client->session);
-	if (clnt_sess_mapped != srvr_sess_mapped) {
-		// something weird is going on...
-		tls12_prx_terminate_both(SSL_AD_INTERNAL_ERROR, SSL_AD_INTERNAL_ERROR);
-		return 0;
-	} else if (!clnt_sess_mapped) {
-		// ensure that both session are mapped correctly
-		memcpy(
-				&(conn_prx_is_server->session->mapped_sid[0]), // to
-				&(conn_prx_is_client->session->session_id[0]), // from
-				SSL_MAX_SSL_SESSION_ID_LENGTH
-		);
-		memcpy(
-				&(conn_prx_is_client->session->mapped_sid[0]), // to
-				&(conn_prx_is_server->session->session_id[0]), // from
-				SSL_MAX_SSL_SESSION_ID_LENGTH
-		);
+	// if server responds with a one-time session, proxy must mirror
+	if (s->session->session_id_length == 0) {
+		conn_prx_is_server->session->session_id_length = 0;
+		memset(&(conn_prx_is_server->session[0]), 0, SSL_MAX_SSL_SESSION_ID_LENGTH);
 	} else {
-		int clnt_to_srvr_cmp = strcmp(
-				(char*) &(conn_prx_is_server->session->mapped_sid[0]),
-				(char*) &(conn_prx_is_client->session->session_id[0]));
-		int srvr_to_clnt_cmp = strcmp(
-				(char*) &(conn_prx_is_client->session->mapped_sid[0]),
-				(char*) &(conn_prx_is_server->session->session_id[0]));
-		if ((clnt_to_srvr_cmp != 0) || (srvr_to_clnt_cmp != 0)) {
+		/*
+		 * Both sessions should have a session ID and we only
+		 * have to handle mapping now.
+		 */
+		int clnt_sess_mapped = SSL_SESSION_is_mapped(conn_prx_is_server->session);
+		int srvr_sess_mapped = SSL_SESSION_is_mapped(conn_prx_is_client->session);
+		if (clnt_sess_mapped != srvr_sess_mapped) {
 			// something weird is going on...
 			tls12_prx_terminate_both(SSL_AD_INTERNAL_ERROR, SSL_AD_INTERNAL_ERROR);
 			return 0;
+		} else if (!clnt_sess_mapped) {
+			// ensure that both session are mapped correctly
+			memcpy(
+					&(conn_prx_is_server->session->mapped_sid[0]), // to
+					&(conn_prx_is_client->session->session_id[0]), // from
+					SSL_MAX_SSL_SESSION_ID_LENGTH
+			);
+			memcpy(
+					&(conn_prx_is_client->session->mapped_sid[0]), // to
+					&(conn_prx_is_server->session->session_id[0]), // from
+					SSL_MAX_SSL_SESSION_ID_LENGTH
+			);
+		} else {
+			// confirm bijection
+			int clnt_to_srvr_cmp = strcmp(
+					(char*) &(conn_prx_is_server->session->mapped_sid[0]),
+					(char*) &(conn_prx_is_client->session->session_id[0]));
+			int srvr_to_clnt_cmp = strcmp(
+					(char*) &(conn_prx_is_client->session->mapped_sid[0]),
+					(char*) &(conn_prx_is_server->session->session_id[0]));
+			if ((clnt_to_srvr_cmp != 0) || (srvr_to_clnt_cmp != 0)) {
+				// something weird is going on...
+				tls12_prx_terminate_both(SSL_AD_INTERNAL_ERROR, SSL_AD_INTERNAL_ERROR);
+				return 0;
+			}
 		}
 	}
 
 	// time to stop if we only forward communication
-	if (tls12_prx_should_inspect_early()) {
+	if (tls12_prx_only_forward_comm()) {
 		goto done;
 	}
 
@@ -2609,8 +2633,7 @@ int tls12_prx_crt_rqst_rcvd_cb(SSL* s)
  * from the client.
  * Note: unreachable if communication is forwarded.
  */
-int tls12_prx_clnt_crt_rcvd_cb(SSL* s, unsigned char* msg,
-		unsigned long msg_len)
+int tls12_prx_clnt_crt_rcvd_cb(SSL* s)
 {
 	/*
 	 * At this point, we know that server demanded client authentication
@@ -2655,34 +2678,4 @@ int tls12_prx_clnt_crt_rcvd_cb(SSL* s, unsigned char* msg,
 
 	// and return
 	return 1;
-}
-
-int todo(void)
-{
-	// SSL_is_client
-	// SSL_is_server
-
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_CTX_set_ssl_ctx.html
-	// SSL_CONF_CTX_set_ssl_ctx();
-
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_CTX_set_ssl.html
-	// SSL_CONF_CTX_set_ssl();
-
-	// must read and implement!
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_CTX_set_flags.html
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CONF_cmd.html
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_use_PrivateKey.html
-
-	// externalizovanej seznam extenzí a jejich dat pro ServerHello:
-	// https://www.openssl.org/docs/man1.0.2/ssl/SSL_CTX_use_serverinfo.html
-
-	/*
-	 * If necessary, SSL_write() will negotiate a TLS/SSL session, if not already explicitly performed by SSL_connect or SSL_accept.
-	 * If the peer requests a re-negotiation, it will be performed transparently during the SSL_write() operation. The behaviour of SSL_write() depends on the underlying BIO.
-	 * For the transparent negotiation to succeed, the ssl must have been initialized to client or server mode.
-	 * This is being done by calling SSL_set_connect_state or SSL_set_accept_state() before the first call to an SSL_read or SSL_write() function.
-	 */
-
-	puts("Hello World"); /* prints Hello World */
-	return EXIT_SUCCESS;
 }

@@ -2117,16 +2117,48 @@ int MAIN(int argc, char **argv)
     OPENSSL_EXIT(ret);
 }
 
+static void print_certie_chain(BIO *bio, STACK_OF(X509) *chain, X509 *cert,
+		const char* label, char* buf, const unsigned int buf_size)
+{
+	int got_a_chain = 0;
+	if (chain != NULL) {
+		got_a_chain = 1;    /* we don't have it for SSL2 (yet) */
+
+		BIO_printf(bio, "---\n%s certificate chain\n", label);
+		for (int i = 0; i < sk_X509_num(chain); i++) {
+			X509_NAME_oneline(X509_get_subject_name(sk_X509_value(chain, i)),
+							  buf, buf_size);
+			BIO_printf(bio, "%2d s:%s\n", i, buf);
+			X509_NAME_oneline(X509_get_issuer_name(sk_X509_value(chain, i)),
+							  buf, buf_size);
+			BIO_printf(bio, "   i:%s\n", buf);
+			if (c_showcerts)
+				PEM_write_bio_X509(bio, sk_X509_value(chain, i));
+		}
+	}
+
+	BIO_printf(bio, "---\n");
+	if (cert != NULL) {
+		BIO_printf(bio, "%s certificate\n", label);
+
+		/* Redundant if we showed the whole chain */
+		if (!(c_showcerts && got_a_chain))
+			PEM_write_bio_X509(bio, cert);
+		X509_NAME_oneline(X509_get_subject_name(cert), buf, buf_size);
+		BIO_printf(bio, "subject=%s\n", buf);
+		X509_NAME_oneline(X509_get_issuer_name(cert), buf, buf_size);
+		BIO_printf(bio, "issuer=%s\n", buf);
+	} else {
+		BIO_printf(bio, "certificate not available\n");
+	}
+}
+
 static void print_stuff(BIO *bio, SSL *s, int full)
 {
-    X509 *peer = NULL;
     char *p;
     static const char *space = "                ";
     char buf[BUFSIZ];
-    STACK_OF(X509) *sk;
-    STACK_OF(X509_NAME) *sk2;
     const SSL_CIPHER *c;
-    X509_NAME *xn;
     int j, i;
 #ifndef OPENSSL_NO_COMP
     const COMP_METHOD *comp, *expansion;
@@ -2134,52 +2166,37 @@ static void print_stuff(BIO *bio, SSL *s, int full)
     unsigned char *exportedkeymat;
 
     if (full) {
-        int got_a_chain = 0;
+    	// print server certificates
+    	print_certie_chain(
+    			bio,
+				SSL_get_srvr_cert_chain(s),
+				SSL_get_srvr_x509(s),
+				"Server",
+				buf, sizeof buf);
 
-        sk = SSL_get_peer_cert_chain(s);
-        if (sk != NULL) {
-            got_a_chain = 1;    /* we don't have it for SSL2 (yet) */
+    	if (SSL_is_session_inspected(s)) {
+			// print proxy certificates
+			print_certie_chain(
+					bio,
+					SSL_get_peer_cert_chain(s),
+					SSL_get_peer_x509(s),
+					"Proxy",
+					buf, sizeof buf);
+    	}
 
-            BIO_printf(bio, "---\nCertificate chain\n");
-            for (i = 0; i < sk_X509_num(sk); i++) {
-                X509_NAME_oneline(X509_get_subject_name(sk_X509_value(sk, i)),
-                                  buf, sizeof buf);
-                BIO_printf(bio, "%2d s:%s\n", i, buf);
-                X509_NAME_oneline(X509_get_issuer_name(sk_X509_value(sk, i)),
-                                  buf, sizeof buf);
-                BIO_printf(bio, "   i:%s\n", buf);
-                if (c_showcerts)
-                    PEM_write_bio_X509(bio, sk_X509_value(sk, i));
-            }
-        }
+    	STACK_OF(X509_NAME) *sk2 = SSL_get_client_CA_list(s);
+		if ((sk2 != NULL) && (sk_X509_NAME_num(sk2) > 0)) {
+			BIO_printf(bio, "---\nAcceptable client certificate CA names\n");
+			for (int i = 0; i < sk_X509_NAME_num(sk2); i++) {
+				X509_NAME *xn = sk_X509_NAME_value(sk2, i);
+				X509_NAME_oneline(xn, buf, sizeof buf);
+				BIO_write(bio, buf, strlen(buf));
+				BIO_write(bio, "\n", 1);
+			}
+		} else {
+			BIO_printf(bio, "---\nNo client certificate CA names sent\n");
+		}
 
-        BIO_printf(bio, "---\n");
-        peer = SSL_get_peer_x509(s);
-        if (peer != NULL) {
-            BIO_printf(bio, "Server certificate\n");
-
-            /* Redundant if we showed the whole chain */
-            if (!(c_showcerts && got_a_chain))
-                PEM_write_bio_X509(bio, peer);
-            X509_NAME_oneline(X509_get_subject_name(peer), buf, sizeof buf);
-            BIO_printf(bio, "subject=%s\n", buf);
-            X509_NAME_oneline(X509_get_issuer_name(peer), buf, sizeof buf);
-            BIO_printf(bio, "issuer=%s\n", buf);
-        } else
-            BIO_printf(bio, "no peer certificate available\n");
-
-        sk2 = SSL_get_client_CA_list(s);
-        if ((sk2 != NULL) && (sk_X509_NAME_num(sk2) > 0)) {
-            BIO_printf(bio, "---\nAcceptable client certificate CA names\n");
-            for (i = 0; i < sk_X509_NAME_num(sk2); i++) {
-                xn = sk_X509_NAME_value(sk2, i);
-                X509_NAME_oneline(xn, buf, sizeof(buf));
-                BIO_write(bio, buf, strlen(buf));
-                BIO_write(bio, "\n", 1);
-            }
-        } else {
-            BIO_printf(bio, "---\nNo client certificate CA names sent\n");
-        }
         p = SSL_get_shared_ciphers(s, buf, sizeof buf);
         if (p != NULL) {
             /*
@@ -2218,10 +2235,12 @@ static void print_stuff(BIO *bio, SSL *s, int full)
     c = SSL_get_current_cipher(s);
     BIO_printf(bio, "%s, Cipher is %s\n",
                SSL_CIPHER_get_version(c), SSL_CIPHER_get_name(c));
+
+    X509 *peer = SSL_get_peer_x509(s);
     if (peer != NULL) {
         EVP_PKEY *pktmp;
         pktmp = X509_get_pubkey(peer);
-        BIO_printf(bio, "Server public key is %d bit\n",
+        BIO_printf(bio, "Peer public key is %d bit\n",
                    EVP_PKEY_bits(pktmp));
         EVP_PKEY_free(pktmp);
     }
@@ -2274,12 +2293,12 @@ static void print_stuff(BIO *bio, SSL *s, int full)
 #endif
 
 #ifndef OPENSSL_NO_TLSEXT
-if (SSL_was_tpe_included(s)) {
-	BIO_printf(bio, "TPE included\n");
-}
-if (SSL_is_session_inspected(s)) {
-	BIO_printf(bio, "TPE inspection activated\n");
-}
+	if (SSL_was_tpe_included(s)) {
+		BIO_printf(bio, "TPE included\n");
+	}
+	if (SSL_is_session_inspected(s)) {
+		BIO_printf(bio, "TPE inspection activated\n");
+	}
 #endif
 
 #ifndef OPENSSL_NO_SRTP
